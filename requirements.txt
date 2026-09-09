@@ -1,0 +1,9 @@
+flask>=3.0.0
+requests>=2.31.0
+pillow>=10.0.0
+
+# Optional / Face Recognition Dependencies:
+# face_recognition requires dlib and CMake on Windows.
+# If you wish to use facial recognition, install:
+# pip install cmake face_recognition
+opencv-python>=4.8.0

@@ -1,0 +1,46 @@
+# ==========================================
+# Credentials & Secrets
+# ==========================================
+firmware/doorbell_cam/credentials.h
+.env
+
+# ==========================================
+# Firmware Build Artifacts
+# ==========================================
+build/
+**/build/
+*.bin
+*.elf
+*.map
+
+# ==========================================
+# Python & Bytecode
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# ==========================================
+# Runtime Data & Personal Captures
+# ==========================================
+visitors/*
+!visitors/.gitkeep
+visitors.db
+face_db/encodings.pkl
+known_faces/*.jpg
+known_faces/*.jpeg
+known_faces/*.png
+!known_faces/.gitkeep
+!known_faces/README.md
+
+# ==========================================
+# Logs & IDE Configs
+# ==========================================
+*.log
+.vscode/
+.idea/
+*.swp
+*.bak
