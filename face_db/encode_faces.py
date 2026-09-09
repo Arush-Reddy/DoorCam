@@ -45,7 +45,32 @@ def build_face_encodings():
         print(f" -> Processing '{name}' from {filename}...")
         try:
             image = face_recognition.load_image_file(image_path)
-            encodings = face_recognition.face_encodings(image)
+            locs = face_recognition.face_locations(image, number_of_times_to_upsample=1)
+            if not locs:
+                locs = face_recognition.face_locations(image, number_of_times_to_upsample=2)
+            if locs:
+                encodings = face_recognition.face_encodings(image, known_face_locations=locs)
+            else:
+                encodings = []
+
+            # Smart Fallback: If standard HOG misses due to UI bounding boxes or low contrast
+            if not encodings:
+                try:
+                    import cv2
+                    import numpy as np
+                    bgr = cv2.imread(image_path)
+                    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+                    mask = cv2.inRange(hsv, np.array([35, 100, 100]), np.array([130, 255, 255]))
+                    pts = cv2.findNonZero(mask)
+                    if pts is not None and len(pts) > 50:
+                        x, y, w, h = cv2.boundingRect(pts)
+                        if w > 80 and h > 80:
+                            dlib_loc = [(y, x + w, y + h, x)]
+                            fallback_encs = face_recognition.face_encodings(image, known_face_locations=dlib_loc)
+                            if fallback_encs:
+                                encodings = fallback_encs
+                except Exception as ex:
+                    print(f"    [DEBUG] Fallback check failed: {ex}")
 
             if encodings:
                 known_encodings.append(encodings[0])

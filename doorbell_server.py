@@ -70,8 +70,15 @@ def recognize_faces_in_image(image_path: str):
 
     try:
         unknown_image = face_recognition.load_image_file(image_path)
-        unknown_encodings = face_recognition.face_encodings(unknown_image)
+        # Multi-scale face detection: first try standard, then 2x upsample for distant/VGA faces
+        face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=1)
+        if not face_locs:
+            face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=2)
 
+        if not face_locs:
+            return "Visitor (No face detected)", None
+
+        unknown_encodings = face_recognition.face_encodings(unknown_image, known_face_locations=face_locs)
         if not unknown_encodings:
             return "Visitor (No face detected)", None
 
