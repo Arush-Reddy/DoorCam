@@ -36,7 +36,7 @@
   const int serverPort = 5000;
 #endif
 
-#define ENABLE_PIR false  // Disabled until PIR sensor is physically wired
+#define ENABLE_PIR true   // Enabled for HC-SR501 PIR motion sensor on GPIO 13
 const char* serverPath = "/visitor";
 
 // ==========================================
