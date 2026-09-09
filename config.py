@@ -40,3 +40,8 @@ NOTIFICATION_COOLDOWN_SECONDS = 10
 # ESP32-CAM Streaming Settings
 # When your ESP32-CAM connects to WiFi, enter its IP address here
 ESP32_CAM_IP = "192.168.0.6"
+
+# Remote Internet Access (Cloudflare Tunnel)
+# Creates a secure global HTTPS URL accessible on 4G/5G anywhere in the world without port forwarding
+ENABLE_REMOTE_TUNNEL = True
+

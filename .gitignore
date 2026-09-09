@@ -44,3 +44,5 @@ known_faces/*.png
 .idea/
 *.swp
 *.bak
+tools/
+public_url.txt

@@ -77,7 +77,14 @@ def dispatch_all_alerts(photo_path: str, recognized_name: str, trigger_source: s
     title = f"Doorbell Alert: {status_label}"
     msg = f"Trigger: {trigger_source} motion at {timestamp_str}"
     
-    click_url = f"http://{config.ESP32_CAM_IP}:81" if config.ESP32_CAM_IP else None
+    public_url = None
+    try:
+        import tunnel
+        public_url = tunnel.get_public_url()
+    except Exception:
+        pass
+
+    click_url = public_url if public_url else (f"http://{config.ESP32_CAM_IP}:81" if config.ESP32_CAM_IP else None)
 
     # 1. Native CCTV Push (ntfy)
     send_ntfy_alert(photo_path, title, msg, click_url=click_url)

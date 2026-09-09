@@ -37,3 +37,6 @@ NOTIFICATION_COOLDOWN_SECONDS = 10
 
 # ESP32-CAM Stream Settings (IP assigned by router to ESP32-CAM)
 ESP32_CAM_IP = "192.168.0.6"
+
+# Remote Internet Access (Cloudflare Tunnel)
+ENABLE_REMOTE_TUNNEL = True

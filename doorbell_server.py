@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify, send_from_directory, render_template_
 import config
 import notify
 import visitor_log
+import tunnel
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -155,6 +156,16 @@ def update_config():
         "ntfy_topic": config.NTFY_TOPIC,
         "ntfy_server": config.NTFY_SERVER,
         "cooldown": config.NOTIFICATION_COOLDOWN_SECONDS
+    })
+
+@app.route("/api/tunnel")
+def tunnel_status():
+    """Returns the active Cloudflare Tunnel public URL."""
+    url = tunnel.get_public_url()
+    return jsonify({
+        "enabled": getattr(config, "ENABLE_REMOTE_TUNNEL", False),
+        "public_url": url,
+        "status": "online" if url else "connecting"
     })
 
 # ==========================================
@@ -574,6 +585,7 @@ def app_home():
                 </div>
             </div>
             <div class="app-actions">
+                <button class="icon-btn" onclick="openTunnelModal()" id="btn-tunnel" title="Worldwide Remote Access (Cloudflare)">🌐</button>
                 <button class="icon-btn" onclick="openConfigModal()" title="Camera Settings">⚙️</button>
                 <button class="icon-btn" onclick="enablePushNotifications()" id="btn-notify" title="Enable Alerts">🔔</button>
             </div>
@@ -704,6 +716,35 @@ def app_home():
 
                     <button class="modal-close-btn" style="background:var(--accent); border:none; margin-bottom:8px;" onclick="saveConfig()">Save Settings</button>
                     <button class="modal-close-btn" onclick="closeConfigModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Remote Access (Cloudflare Tunnel) Modal -->
+        <div class="modal-bg" id="tunnel-modal" onclick="closeTunnelModal(event)">
+            <div class="modal-card" onclick="event.stopPropagation()">
+                <div class="modal-body">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+                        <span style="font-size:24px;">🌐</span>
+                        <div>
+                            <h3 style="margin:0; font-size:17px;">Global Remote Access</h3>
+                            <div style="font-size:12px; color:var(--text-muted);">Cloudflare Zero-Trust Secure Tunnel</div>
+                        </div>
+                    </div>
+                    <p style="font-size:13px; color:var(--text-muted); line-height:1.4;">
+                        Access your DoorCam live video stream, chime, and alerts anywhere in the world on 4G/5G mobile data with zero port-forwarding.
+                    </p>
+                    <div style="background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:12px; margin:12px 0;">
+                        <label style="font-size:11px; font-weight:700; color:var(--accent-light); text-transform:uppercase; letter-spacing:0.5px;">Your Public HTTPS URL</label>
+                        <div id="tunnel-url-display" style="font-family:monospace; font-size:13px; color:#fff; word-break:break-all; margin:6px 0;">
+                            {{ tunnel_url or 'Initializing secure tunnel...' }}
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                        <button class="modal-close-btn" style="background:var(--accent); border:none; margin:0; flex:1;" onclick="copyTunnelUrl()">📋 Copy Link</button>
+                        <button class="modal-close-btn" style="background:var(--surface-card); border:1px solid var(--border); margin:0; flex:1;" onclick="openTunnelUrl()">🚀 Open URL</button>
+                    </div>
+                    <button class="modal-close-btn" onclick="closeTunnelModal()">Close</button>
                 </div>
             </div>
         </div>
@@ -903,6 +944,55 @@ def app_home():
                 }
             }
 
+            function openTunnelModal() {
+                updateTunnelStatus();
+                document.getElementById('tunnel-modal').style.display = 'flex';
+            }
+            function closeTunnelModal(e) {
+                if (!e || e.target === document.getElementById('tunnel-modal') || e.target.classList.contains('modal-close-btn')) {
+                    document.getElementById('tunnel-modal').style.display = 'none';
+                }
+            }
+
+            let currentTunnelUrl = "{{ tunnel_url or '' }}";
+
+            function updateTunnelStatus() {
+                fetch('/api/tunnel')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.public_url) {
+                            currentTunnelUrl = data.public_url;
+                            const el = document.getElementById('tunnel-url-display');
+                            if (el) el.textContent = currentTunnelUrl;
+                            const btn = document.getElementById('btn-tunnel');
+                            if (btn) btn.style.borderColor = 'var(--success)';
+                        }
+                    })
+                    .catch(() => {});
+            }
+
+            function copyTunnelUrl() {
+                if (currentTunnelUrl && currentTunnelUrl.startsWith('https://')) {
+                    navigator.clipboard.writeText(currentTunnelUrl).then(() => {
+                        alert("✅ Copied Cloudflare URL to clipboard!\nOpen this link on your phone over 4G/5G.");
+                    });
+                } else {
+                    alert("Tunnel is initializing. Please wait a few seconds...");
+                }
+            }
+
+            function openTunnelUrl() {
+                if (currentTunnelUrl && currentTunnelUrl.startsWith('https://')) {
+                    window.open(currentTunnelUrl, '_blank');
+                } else {
+                    alert("Tunnel is initializing. Please wait a few seconds...");
+                }
+            }
+
+            // Periodic check for tunnel URL
+            setInterval(updateTunnelStatus, 8000);
+            updateTunnelStatus();
+
             function saveConfig() {
                 const ip = document.getElementById('input-cam-ip').value;
                 const topic = document.getElementById('input-ntfy-topic').value;
@@ -923,7 +1013,8 @@ def app_home():
         visits=visits,
         known_count=known_count,
         esp32_ip=config.ESP32_CAM_IP,
-        ntfy_topic=config.NTFY_TOPIC
+        ntfy_topic=config.NTFY_TOPIC,
+        tunnel_url=tunnel.get_public_url()
     )
 
 @app.route("/photo/<path:filename>")
@@ -1034,5 +1125,10 @@ def visitor():
 if __name__ == "__main__":
     visitor_log.init_db()
     load_encodings()
+
+    # Start Cloudflare Tunnel for worldwide mobile internet access
+    if getattr(config, "ENABLE_REMOTE_TUNNEL", False):
+        tunnel.start_tunnel(config.SERVER_PORT)
+
     logger.info("Starting DoorCam CCTV server on http://%s:%d", config.SERVER_HOST, config.SERVER_PORT)
     app.run(host=config.SERVER_HOST, port=config.SERVER_PORT, debug=False, threaded=True)

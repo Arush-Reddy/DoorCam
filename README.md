@@ -65,6 +65,9 @@ Long jumper wires and electrical fluctuations can cause CMOS sensors to drop SCC
 ### 4. Hardware UART Passthrough Flasher Bridge
 To program the ESP32-CAM without requiring a dedicated FTDI USB-to-UART adapter dongle, an **ESP32-S3 microcontroller was scripted as an automated bidirectional serial bridge** at 115200 baud, enabling firmware flashing directly over native USB.
 
+### 5. Zero-Trust Global Remote Access (Cloudflare Tunnel)
+Accessing home surveillance outside the local LAN traditionally requires risky router port forwarding (NAT hole-punching) or complex VPNs. DoorCam integrates an automated, zero-trust **Cloudflare Quick Tunnel (`cloudflared`)** daemon. Upon server boot, it establishes an outbound encrypted QUIC/HTTP2 tunnel directly to Cloudflare's global edge network, providing a secure, public `https://*.trycloudflare.com` URL. The user can view live video, hear real-time chimes, and receive alerts from anywhere in the world on 4G/5G mobile data with zero open firewall ports.
+
 ---
 
 ## 📊 Benchmark & Performance Metrics
@@ -113,6 +116,7 @@ GPIO 0    ------> Bootloader Flashing Mode (Short to GND to Flash)
 - **Computer Vision:** `face_recognition` (dlib ResNet-34 128D embedding metric learning, Euclidean distance threshold `0.54`).
 - **Frontend / PWA:** HTML5, CSS3 Glassmorphism, Vanilla JS, Server-Sent Events (`EventSource`), Web Audio API (`AudioContext` oscillator for real-time chime synthesis).
 - **Mobile Push Engine:** `ntfy.sh` (open-source pub-sub notification protocol with native Android/iOS lock-screen image rendering).
+- **Secure Networking:** Cloudflare Zero-Trust Quick Tunnel (`cloudflared`) for outbound HTTPS remote connectivity without port forwarding.
 
 ---
 
