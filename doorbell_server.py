@@ -71,15 +71,44 @@ def recognize_faces_in_image(image_path: str):
 
     try:
         unknown_image = face_recognition.load_image_file(image_path)
-        # Multi-scale face detection: first try standard, then 2x upsample for distant/VGA faces
+        # 1. Multi-scale face detection: first try standard, then 2x upsample
         face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=1)
         if not face_locs:
             face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=2)
 
+        target_image = unknown_image
+
+        # 2. Adaptive Enhancement: If upright misses, apply CLAHE contrast enhancement & check tilts
+        if not face_locs:
+            try:
+                import cv2
+                bgr = cv2.imread(image_path)
+                if bgr is not None:
+                    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+                    l, a, b = cv2.split(lab)
+                    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
+                    cl = clahe.apply(l)
+                    enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)
+                    face_locs = face_recognition.face_locations(enhanced, number_of_times_to_upsample=2)
+                    if face_locs:
+                        target_image = enhanced
+                    else:
+                        (h, w) = bgr.shape[:2]
+                        for ang in [25, -25, 35, -35]:
+                            M = cv2.getRotationMatrix2D((w // 2, h // 2), ang, 1.0)
+                            rot = cv2.warpAffine(enhanced, M, (w, h))
+                            r_locs = face_recognition.face_locations(rot, number_of_times_to_upsample=1)
+                            if r_locs:
+                                face_locs = r_locs
+                                target_image = rot
+                                break
+            except Exception as e:
+                logger.debug("Adaptive enhancement error: %s", e)
+
         if not face_locs:
             return "Visitor (No face detected)", None
 
-        unknown_encodings = face_recognition.face_encodings(unknown_image, known_face_locations=face_locs)
+        unknown_encodings = face_recognition.face_encodings(target_image, known_face_locations=face_locs)
         if not unknown_encodings:
             return "Visitor (No face detected)", None
 
@@ -1062,6 +1091,10 @@ def visitor():
         photo_saved = True
 
     if not photo_saved:
+        # If triggered by physical button, pause 250ms so user's hand clears the lens and eyes focus on camera
+        if trigger_source == "BUTTON":
+            time.sleep(0.25)
+
         with camera_relay.lock:
             frame = camera_relay.latest_frame
         if frame:

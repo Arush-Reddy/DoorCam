@@ -38,8 +38,11 @@ def build_face_encodings():
 
     print(f"Found {len(image_files)} image(s) in {config.KNOWN_FACES_DIR}. Processing...")
 
+    import re
     for filename in image_files:
-        name = os.path.splitext(filename)[0].replace("_", " ").title()
+        raw_name = os.path.splitext(filename)[0]
+        clean_name = re.sub(r'[-_]\d+$', '', raw_name)
+        name = clean_name.replace("_", " ").title()
         image_path = os.path.join(config.KNOWN_FACES_DIR, filename)
 
         print(f" -> Processing '{name}' from {filename}...")
