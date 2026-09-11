@@ -1104,92 +1104,105 @@ def visitor():
     """
     global last_notification_time
 
-    trigger_source = request.args.get("trigger", request.form.get("trigger", "PIR")).upper()
-    now = datetime.datetime.now()
-    current_time_sec = time.time()
+    try:
+        trigger_source = request.args.get("trigger", request.form.get("trigger", "PIR")).upper()
+        now = datetime.datetime.now()
+        current_time_sec = time.time()
 
-    # Determine save directory: visitors/YYYY-MM-DD/
-    day_folder = os.path.join(config.VISITORS_DIR, now.strftime("%Y-%m-%d"))
-    os.makedirs(day_folder, exist_ok=True)
+        # Determine save directory: visitors/YYYY-MM-DD/
+        day_folder = os.path.join(config.VISITORS_DIR, now.strftime("%Y-%m-%d"))
+        os.makedirs(day_folder, exist_ok=True)
 
-    photo_filename = now.strftime("%H-%M-%S") + ".jpg"
-    photo_save_path = os.path.join(day_folder, photo_filename)
+        photo_filename = now.strftime("%H-%M-%S") + ".jpg"
+        photo_save_path = os.path.join(day_folder, photo_filename)
 
-    # Save photo from multipart form, raw body, or pull directly from live stream relay buffer
-    photo_saved = False
-    if "photo" in request.files:
-        photo_file = request.files["photo"]
-        photo_file.save(photo_save_path)
-        photo_saved = True
-    elif request.data and len(request.data) > 0:
-        with open(photo_save_path, "wb") as f:
-            f.write(request.data)
-        photo_saved = True
-
-    if not photo_saved:
-        # If triggered by physical button, pause 250ms so user's hand clears the lens and eyes focus on camera
-        if trigger_source == "BUTTON":
-            time.sleep(0.25)
-
-        with camera_relay.lock:
-            frame = camera_relay.latest_frame
-        if frame:
-            with open(photo_save_path, "wb") as f:
-                f.write(frame)
+        # Save photo from multipart form, raw body, or pull directly from live stream relay buffer
+        photo_saved = False
+        if "photo" in request.files:
+            photo_file = request.files["photo"]
+            photo_file.save(photo_save_path)
             photo_saved = True
-            logger.info("Captured snapshot directly from live stream relay memory buffer (%d bytes)", len(frame))
+        elif request.data and len(request.data) > 0:
+            with open(photo_save_path, "wb") as f:
+                f.write(request.data)
+            photo_saved = True
+
+        if not photo_saved:
+            # If triggered by physical button, pause 250ms so user's hand clears the lens and eyes focus on camera
+            if trigger_source == "BUTTON":
+                time.sleep(0.25)
+
+            with camera_relay.lock:
+                frame = camera_relay.latest_frame
+            if frame:
+                with open(photo_save_path, "wb") as f:
+                    f.write(frame)
+                photo_saved = True
+                logger.info("Captured snapshot directly from live stream relay memory buffer (%d bytes)", len(frame))
+            else:
+                logger.warning("Received /visitor request with no photo data and live stream buffer is empty")
+                return jsonify({"error": "No photo data or live stream available"}), 400
+
+        logger.info("Saved snapshot: %s (Trigger: %s)", photo_save_path, trigger_source)
+
+        # Run facial recognition
+        recognized_name = "Visitor"
+        confidence = None
+        try:
+            recognized_name, confidence = recognize_faces_in_image(photo_save_path)
+            logger.info("Identified: %s (dist: %s)", recognized_name, confidence)
+        except Exception as fe:
+            logger.error("Face recognition exception: %s", fe)
+
+        # Log to database
+        visit_id = visitor_log.log_visit(
+            name=recognized_name,
+            photo_path=photo_save_path,
+            trigger_source=trigger_source,
+            confidence=confidence
+        )
+
+        relative_photo_path = os.path.relpath(photo_save_path, config.BASE_DIR)
+        photo_url = f"/photo/{relative_photo_path.replace(chr(92), '/')}"
+
+        # Broadcast to live Web App & PWA clients instantly
+        event_payload = {
+            "type": "visitor",
+            "visit_id": visit_id,
+            "name": recognized_name,
+            "trigger": trigger_source,
+            "timestamp": now.strftime("%I:%M:%S %p"),
+            "photo_url": photo_url
+        }
+        broadcast_event(event_payload)
+
+        # Check cooldown before sending external push notifications
+        time_since_last = current_time_sec - last_notification_time
+        if time_since_last >= config.NOTIFICATION_COOLDOWN_SECONDS:
+            last_notification_time = current_time_sec
+            timestamp_str = now.strftime("%I:%M:%S %p • %d %b %Y")
+            
+            # Dispatches via ntfy (dedicated CCTV app) & Telegram (if enabled)
+            try:
+                notify.dispatch_all_alerts(photo_save_path, recognized_name, trigger_source, timestamp_str)
+            except Exception as ne:
+                logger.error("Notification dispatch error: %s", ne)
         else:
-            logger.warning("Received /visitor request with no photo data and live stream buffer is empty")
-            return jsonify({"error": "No photo data or live stream available"}), 400
+            logger.info("External alert suppressed by anti-spam cooldown (elapsed: %.1fs < %ds)", 
+                        time_since_last, config.NOTIFICATION_COOLDOWN_SECONDS)
 
-    logger.info("Saved snapshot: %s (Trigger: %s)", photo_save_path, trigger_source)
+        return jsonify({
+            "status": "success",
+            "visit_id": visit_id,
+            "name": recognized_name,
+            "trigger": trigger_source,
+            "photo_url": photo_url,
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception as e:
+        logger.exception("Critical error handling /visitor: %s", e)
+        return jsonify({"status": "error", "error": str(e)}), 500
 
-    # Run facial recognition
-    recognized_name, confidence = recognize_faces_in_image(photo_save_path)
-    logger.info("Identified: %s (dist: %s)", recognized_name, confidence)
-
-    # Log to database
-    visit_id = visitor_log.log_visit(
-        name=recognized_name,
-        photo_path=photo_save_path,
-        trigger_source=trigger_source,
-        confidence=confidence
-    )
-
-    relative_photo_path = os.path.relpath(photo_save_path, config.BASE_DIR)
-    photo_url = f"/photo/{relative_photo_path.replace(chr(92), '/')}"
-
-    # Broadcast to live Web App & PWA clients instantly
-    event_payload = {
-        "type": "visitor",
-        "visit_id": visit_id,
-        "name": recognized_name,
-        "trigger": trigger_source,
-        "timestamp": now.strftime("%I:%M:%S %p"),
-        "photo_url": photo_url
-    }
-    broadcast_event(event_payload)
-
-    # Check cooldown before sending external push notifications
-    time_since_last = current_time_sec - last_notification_time
-    if time_since_last >= config.NOTIFICATION_COOLDOWN_SECONDS:
-        last_notification_time = current_time_sec
-        timestamp_str = now.strftime("%I:%M:%S %p • %d %b %Y")
-        
-        # Dispatches via ntfy (dedicated CCTV app) & Telegram (if enabled)
-        notify.dispatch_all_alerts(photo_save_path, recognized_name, trigger_source, timestamp_str)
-    else:
-        logger.info("External alert suppressed by anti-spam cooldown (elapsed: %.1fs < %ds)", 
-                    time_since_last, config.NOTIFICATION_COOLDOWN_SECONDS)
-
-    return jsonify({
-        "status": "success",
-        "visit_id": visit_id,
-        "name": recognized_name,
-        "trigger": trigger_source,
-        "photo_url": photo_url,
-        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S")
-    })
 
 if __name__ == "__main__":
     visitor_log.init_db()
