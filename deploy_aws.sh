@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -e
 
 echo "=========================================="
@@ -32,6 +32,9 @@ fi
 
 source venv/bin/activate
 pip install --upgrade pip
+
+# Prevent out-of-memory errors when building dlib C++ templates
+export CMAKE_BUILD_PARALLEL_LEVEL=1
 pip install -r requirements_hf.txt
 
 # 4. Create 24/7 background systemd service
