@@ -56,22 +56,21 @@ def build_face_encodings():
             else:
                 encodings = []
 
-            # Smart Fallback: If standard HOG misses due to UI bounding boxes or low contrast
+            # Smart Fallback: Sensitive dlib detector for haircuts, tilted heads, or shadows
             if not encodings:
                 try:
+                    import dlib
                     import cv2
-                    import numpy as np
-                    bgr = cv2.imread(image_path)
-                    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-                    mask = cv2.inRange(hsv, np.array([35, 100, 100]), np.array([130, 255, 255]))
-                    pts = cv2.findNonZero(mask)
-                    if pts is not None and len(pts) > 50:
-                        x, y, w, h = cv2.boundingRect(pts)
-                        if w > 80 and h > 80:
-                            dlib_loc = [(y, x + w, y + h, x)]
-                            fallback_encs = face_recognition.face_encodings(image, known_face_locations=dlib_loc)
-                            if fallback_encs:
-                                encodings = fallback_encs
+                    dlib_det = dlib.get_frontal_face_detector()
+                    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                    dets, scores, idx = dlib_det.run(gray, 1, -1.0)
+                    if dets:
+                        d = dets[0]
+                        dlib_loc = [(max(0, d.top()), d.right(), d.bottom(), max(0, d.left()))]
+                        fallback_encs = face_recognition.face_encodings(image, known_face_locations=dlib_loc)
+                        if fallback_encs:
+                            encodings = fallback_encs
+                            print(f"    [INFO] Detected via sensitive detector (score={scores[0]:.2f})")
                 except Exception as ex:
                     print(f"    [DEBUG] Fallback check failed: {ex}")
 

@@ -5,7 +5,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Server Configuration
 SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 5000
+SERVER_PORT = int(os.environ.get("PORT", 5000))
 APP_NAME = "DoorCam CCTV"
 
 # Dedicated Mobile Notification App (ntfy.sh)
@@ -39,9 +39,9 @@ NOTIFICATION_COOLDOWN_SECONDS = 10
 
 # ESP32-CAM Streaming Settings
 # When your ESP32-CAM connects to WiFi, enter its IP address here
-ESP32_CAM_IP = "192.168.0.6"
+ESP32_CAM_IP = "192.168.0.11"
 
 # Remote Internet Access (Cloudflare Tunnel)
 # Creates a secure global HTTPS URL accessible on 4G/5G anywhere in the world without port forwarding
-ENABLE_REMOTE_TUNNEL = True
+ENABLE_REMOTE_TUNNEL = os.environ.get("ENABLE_REMOTE_TUNNEL", "true").lower() == "true"
 

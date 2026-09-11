@@ -105,6 +105,21 @@ def recognize_faces_in_image(image_path: str):
             except Exception as e:
                 logger.debug("Adaptive enhancement error: %s", e)
 
+        # 3. Sensitive dlib detector fallback (for haircuts, bangs, tilted heads, overhead lighting)
+        if not face_locs:
+            try:
+                import dlib
+                import cv2
+                dlib_det = dlib.get_frontal_face_detector()
+                gray = cv2.cvtColor(target_image if isinstance(target_image, np.ndarray) else np.array(target_image), cv2.COLOR_RGB2GRAY)
+                dets, scores, idx = dlib_det.run(gray, 1, -1.0)
+                if dets:
+                    d = dets[0]
+                    face_locs = [(max(0, d.top()), d.right(), d.bottom(), max(0, d.left()))]
+                    logger.info("Face detected via sensitive detector fallback (score=%.2f)", scores[0])
+            except Exception as e:
+                logger.debug("Sensitive detector fallback error: %s", e)
+
         if not face_locs:
             return "Visitor (No face detected)", None
 
@@ -210,8 +225,19 @@ class CameraStreamRelay:
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
 
+    def push_frame(self, frame_bytes):
+        """Allows remote ESP32 to push frames directly to cloud server."""
+        with self.lock:
+            self.latest_frame = frame_bytes
+            self.last_frame_time = time.time()
+
     def _worker(self):
         while self.running:
+            # On cloud hosts like Hugging Face, don't attempt local subnet polling
+            if os.environ.get("SPACE_ID") or os.environ.get("CLOUD_DEPLOYMENT"):
+                time.sleep(2)
+                continue
+
             cam_ip = getattr(config, "ESP32_CAM_IP", "").strip()
             if not cam_ip:
                 time.sleep(1)
@@ -243,6 +269,16 @@ class CameraStreamRelay:
                 time.sleep(1)
 
 camera_relay = CameraStreamRelay()
+
+@app.route("/api/frame_push", methods=["POST"])
+def receive_pushed_frame():
+    """Allows ESP32 to push live stream frames directly to cloud."""
+    data = request.get_data()
+    if data:
+        camera_relay.push_frame(data)
+        return "OK", 200
+    return "No frame", 400
+
 
 @app.route("/video_feed")
 def video_feed():
