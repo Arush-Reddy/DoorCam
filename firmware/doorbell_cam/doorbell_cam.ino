@@ -160,42 +160,56 @@ void startCameraServer() {
   }
 }
 
-// Ultra-fast zero-payload doorbell trigger to Python server (server grabs snapshot from live stream!)
+// Direct JPEG snapshot push to server (supports both local PC and Cloud/AWS servers!)
 bool triggerDoorbell(const char* triggerType) {
   Serial.printf("\n[EVENT] Doorbell triggered by: %s!\n", triggerType);
 
   // Quick blink on status LED for immediate feedback
   digitalWrite(STATUS_LED_PIN, LOW); // ON (Active LOW)
 
+  // Grab fresh high-res snapshot directly from camera sensor
+  camera_fb_t * fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("[CAM ERROR] Failed to capture frame for upload!");
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    return false;
+  }
+
   WiFiClient client;
-  client.setTimeout(800); // 800ms max timeout to keep execution ultra-responsive
+  client.setTimeout(2500);
 
   if (client.connect(serverHost, serverPort)) {
     String url = String(serverPath) + "?trigger=" + String(triggerType);
     client.print(String("POST ") + url + " HTTP/1.1\r\n" +
                  "Host: " + String(serverHost) + ":" + String(serverPort) + "\r\n" +
-                 "Content-Length: 0\r\n" +
+                 "Content-Type: image/jpeg\r\n" +
+                 "Content-Length: " + String(fb->len) + "\r\n" +
                  "Connection: close\r\n\r\n");
+
+    // Stream the binary JPEG bytes directly to server
+    client.write(fb->buf, fb->len);
 
     // Brief check for acknowledgment
     unsigned long start = millis();
-    while (client.connected() && millis() - start < 400) {
+    while (client.connected() && millis() - start < 1000) {
       if (client.available()) {
         String line = client.readStringUntil('\n');
         if (line.indexOf("200") >= 0) {
-          Serial.println("[SERVER] Doorbell event acknowledged (200 OK)!");
+          Serial.println("[SERVER] Doorbell event & photo acknowledged (200 OK)!");
           break;
         }
       }
     }
     client.stop();
   } else {
-    Serial.println("[WARN] Could not connect to Python server for trigger event.");
+    Serial.println("[WARN] Could not connect to server for trigger event.");
   }
 
+  esp_camera_fb_return(fb);
   digitalWrite(STATUS_LED_PIN, HIGH); // OFF
   return true;
 }
+
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector for stable streaming
