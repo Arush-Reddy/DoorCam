@@ -8,12 +8,16 @@ cad_dir = r"d:\ESP\DoorCam\docs\cad"
 
 front_scad = os.path.join(cad_dir, "doorbell_front.scad")
 back_scad = os.path.join(cad_dir, "doorbell_back.scad")
+button_scad = os.path.join(cad_dir, "doorbell_button.scad")
 case_scad = os.path.join(cad_dir, "doorbell_case.scad")
 
 front_stl = os.path.join(cad_dir, "doorbell_front.stl")
 back_stl = os.path.join(cad_dir, "doorbell_back.stl")
-front_ascii_stl = os.path.join(cad_dir, "doorbell_front_ascii.stl")
-back_ascii_stl = os.path.join(cad_dir, "doorbell_back_ascii.stl")
+button_stl = os.path.join(cad_dir, "doorbell_button.stl")
+
+front_ascii = os.path.join(cad_dir, "doorbell_front_ascii.stl")
+back_ascii = os.path.join(cad_dir, "doorbell_back_ascii.stl")
+button_ascii = os.path.join(cad_dir, "doorbell_button_ascii.stl")
 
 def ascii_to_binary_stl(ascii_path, binary_path, name="DoorCam"):
     triangles = []
@@ -63,6 +67,7 @@ def render_previews():
         (case_scad, os.path.join(cad_dir, "doorbell_assembled.png"), ["--camera=0,60,15,45,0,225,250"]),
         (front_scad, os.path.join(cad_dir, "doorbell_front.png"), ["--camera=29,62,6,45,0,225,200"]),
         (back_scad, os.path.join(cad_dir, "doorbell_back.png"), ["--camera=29,62,8,45,0,225,200"]),
+        (button_scad, os.path.join(cad_dir, "doorbell_button.png"), ["--camera=0,0,0,55,0,25,45"]),
     ]
     for src, out, extra_args in previews:
         cmd = [openscad, "-o", out, "--imgsize=1024,768", "--colorscheme=Tomorrow Night"] + extra_args + [src]
@@ -71,16 +76,13 @@ def render_previews():
             print(f"Rendered preview: {os.path.basename(out)}")
 
 if __name__ == "__main__":
-    # 1. Compile Front SCAD to ASCII STL
-    compile_scad(front_scad, front_ascii_stl, "Front Shell")
-    # 2. Compile Back SCAD to ASCII STL
-    compile_scad(back_scad, back_ascii_stl, "Back Shell")
+    compile_scad(front_scad, front_ascii, "Front Shell")
+    compile_scad(back_scad, back_ascii, "Back Shell")
+    compile_scad(button_scad, button_ascii, "Button Plunger")
     
-    # 3. Create high-compatibility Binary STLs
-    ascii_to_binary_stl(front_ascii_stl, front_stl, "DoorCam Front Shell")
-    ascii_to_binary_stl(back_ascii_stl, back_stl, "DoorCam Back Shell")
+    ascii_to_binary_stl(front_ascii, front_stl, "DoorCam Front Shell")
+    ascii_to_binary_stl(back_ascii, back_stl, "DoorCam Back Shell")
+    ascii_to_binary_stl(button_ascii, button_stl, "DoorCam Button Plunger")
     
-    # 4. Render visual preview images
     render_previews()
-    
     print("\nALL 3D PRINT FILES AND PREVIEWS READY FOR ROBU.IN!")

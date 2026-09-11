@@ -4,7 +4,7 @@
 //   - 5x7cm Perfboard (50mm x 70mm)
 //   - AI-Thinker ESP32-CAM (OV3660 / OV2640)
 //   - HC-SR501 PIR Motion Sensor (23mm Fresnel dome)
-//   - 16mm Push Button
+//   - 6x6mm Tactile Button (via 3D Plunger) OR 16mm Panel Button
 //   - Type-C 16-Pin USB Breakout Board
 // Fully optimized for Robu.in / JLCPCB / Local 3D Print Services
 // ====================================================================
@@ -12,7 +12,7 @@
 $fn = 48; // Ultra-smooth curves for production quality
 
 // --- PART SELECTOR ---
-PART = "assembled"; // ["front", "back", "assembled"]
+PART = "assembled"; // ["front", "back", "button", "assembled"]
 
 // --- CORE DIMENSIONS (mm) ---
 wall_thick   = 2.4;     // Sturdy outdoor wall thickness
@@ -98,9 +98,9 @@ module front_shell() {
         translate([outer_w/2, wall_thick + pir_y, -1])
             cylinder(d=pir_d, h=wall_thick + 2.0);
 
-        // 5. Doorbell Push Button Hole (16mm)
+        // 5. Doorbell Push Button Hole (16mm through outer wall & guide sleeve)
         translate([outer_w/2, wall_thick + btn_y, -1])
-            cylinder(d=btn_d, h=wall_thick + 2.0);
+            cylinder(d=btn_d, h=wall_thick + 6.0);
 
         // 6. USB-C Port Notch (Top half at split line)
         translate([outer_w/2 - usbc_w/2, -1, split_z - usbc_h/2])
@@ -186,7 +186,6 @@ module back_shell() {
             cylinder(d=10.0, h=wall_thick + 2);
 
         // 5. Corner Screw Pilot Holes (2.7mm self-tapping for M3)
-        // Drilled 11mm deep into bosses from top down, keeping outer back face sealed
         for (pos = [
             [screw_inset, screw_inset],
             [outer_w - screw_inset, screw_inset],
@@ -200,15 +199,51 @@ module back_shell() {
 }
 
 // ====================================================================
+// 3. BUTTON PLUNGER CAP (For internal 6x6mm tactile switch)
+// ====================================================================
+module button_plunger() {
+    cap_d     = 15.2;   // Outer button cap diameter (smooth slip fit in 16mm hole)
+    cap_h     = 3.0;    // Visible button face thickness
+    flange_d  = 18.0;   // Retaining flange (prevents button from falling out of front)
+    flange_h  = 1.2;    // Flange thickness
+    stem_d    = 5.0;    // Stem diameter pressing against the 6x6 tactile button
+    stem_len  = 12.0;   // Length extending to reach the PCB switch
+    nub_d     = 3.2;    // Actuator tip
+    nub_h     = 1.5;
+
+    union() {
+        // Chamfered tactile face (pokes through front hole)
+        translate([0, 0, flange_h])
+            cylinder(d1=cap_d, d2=cap_d - 1.5, h=cap_h);
+
+        // Retaining flange
+        cylinder(d=flange_d, h=flange_h);
+
+        // Plunger stem
+        translate([0, 0, -stem_len])
+            cylinder(d=stem_d, h=stem_len);
+
+        // Contact nub
+        translate([0, 0, -stem_len - nub_h])
+            cylinder(d=nub_d, h=nub_h);
+    }
+}
+
+// ====================================================================
 // RENDER OUTPUT MODES
 // ====================================================================
 if (PART == "front") {
     front_shell();
 } else if (PART == "back") {
     back_shell();
+} else if (PART == "button") {
+    // Oriented flat on top face for clean layer lines
+    rotate([180, 0, 0]) button_plunger();
 } else {
     // Assembled Inspection View
     color("#0284c7") front_shell();
+    color("#38bdf8") translate([outer_w/2, wall_thick + btn_y, wall_thick]) 
+        button_plunger();
     color("#334155") translate([0, outer_l, split_z + back_depth])
         rotate([180, 0, 0]) back_shell();
 }
