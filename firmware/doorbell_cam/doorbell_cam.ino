@@ -20,6 +20,7 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_http_server.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -175,34 +176,45 @@ bool triggerDoorbell(const char* triggerType) {
     return false;
   }
 
-  WiFiClient client;
-  client.setTimeout(2500);
+  bool isHttps = (serverPort == 443);
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  WiFiClient *clientPtr = nullptr;
 
-  if (client.connect(serverHost, serverPort)) {
+  if (isHttps) {
+    secureClient.setInsecure(); // Skip TLS cert validation for ultra-fast connection
+    secureClient.setTimeout(3500);
+    clientPtr = &secureClient;
+  } else {
+    plainClient.setTimeout(2500);
+    clientPtr = &plainClient;
+  }
+
+  if (clientPtr->connect(serverHost, serverPort)) {
     String url = String(serverPath) + "?trigger=" + String(triggerType);
-    client.print(String("POST ") + url + " HTTP/1.1\r\n" +
-                 "Host: " + String(serverHost) + ":" + String(serverPort) + "\r\n" +
-                 "Content-Type: image/jpeg\r\n" +
-                 "Content-Length: " + String(fb->len) + "\r\n" +
-                 "Connection: close\r\n\r\n");
+    clientPtr->print(String("POST ") + url + " HTTP/1.1\r\n" +
+                     "Host: " + String(serverHost) + "\r\n" +
+                     "Content-Type: image/jpeg\r\n" +
+                     "Content-Length: " + String(fb->len) + "\r\n" +
+                     "Connection: close\r\n\r\n");
 
     // Stream the binary JPEG bytes directly to server
-    client.write(fb->buf, fb->len);
+    clientPtr->write(fb->buf, fb->len);
 
     // Brief check for acknowledgment
     unsigned long start = millis();
-    while (client.connected() && millis() - start < 1000) {
-      if (client.available()) {
-        String line = client.readStringUntil('\n');
+    while (clientPtr->connected() && millis() - start < 1500) {
+      if (clientPtr->available()) {
+        String line = clientPtr->readStringUntil('\n');
         if (line.indexOf("200") >= 0) {
           Serial.println("[SERVER] Doorbell event & photo acknowledged (200 OK)!");
           break;
         }
       }
     }
-    client.stop();
+    clientPtr->stop();
   } else {
-    Serial.println("[WARN] Could not connect to server for trigger event.");
+    Serial.printf("[WARN] Could not connect to %s:%d for trigger event.\n", serverHost, serverPort);
   }
 
   esp_camera_fb_return(fb);

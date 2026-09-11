@@ -233,9 +233,9 @@ class CameraStreamRelay:
 
     def _worker(self):
         while self.running:
-            # On cloud hosts like Hugging Face, don't attempt local subnet polling
-            if os.environ.get("SPACE_ID") or os.environ.get("CLOUD_DEPLOYMENT"):
-                time.sleep(2)
+            # On cloud hosts like Hugging Face or Render, don't attempt local subnet polling
+            if os.environ.get("SPACE_ID") or os.environ.get("CLOUD_DEPLOYMENT") or os.environ.get("RENDER"):
+                time.sleep(5)
                 continue
 
             cam_ip = getattr(config, "ESP32_CAM_IP", "").strip()
