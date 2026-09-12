@@ -70,7 +70,13 @@ def recognize_faces_in_image(image_path: str):
         return "Visitor", None
 
     try:
+        import cv2
         unknown_image = face_recognition.load_image_file(image_path)
+        (h, w) = unknown_image.shape[:2]
+        if max(h, w) > 640:
+            scale = 640.0 / max(h, w)
+            unknown_image = cv2.resize(unknown_image, (int(w * scale), int(h * scale)))
+
         # 1. Multi-scale face detection: first try standard, then 2x upsample
         face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=1)
         if not face_locs:
@@ -202,15 +208,46 @@ def update_config():
         "cooldown": config.NOTIFICATION_COOLDOWN_SECONDS
     })
 
-@app.route("/api/tunnel")
-def tunnel_status():
-    """Returns the active Cloudflare Tunnel public URL."""
-    url = tunnel.get_public_url()
-    return jsonify({
-        "enabled": getattr(config, "ENABLE_REMOTE_TUNNEL", False),
-        "public_url": url,
-        "status": "online" if url else "connecting"
-    })
+@app.route("/api/diagnostics")
+def diagnostics():
+    """System diagnostics endpoint to verify cloud environment, dlib, and face models."""
+    info = {
+        "status": "online",
+        "known_faces_loaded": len(known_faces_data.get("encodings", [])),
+        "known_names": known_faces_data.get("names", []),
+        "python_version": sys.version,
+    }
+    
+    # 1. Test dlib
+    try:
+        import dlib
+        info["dlib_version"] = getattr(dlib, "__version__", "unknown")
+        det = dlib.get_frontal_face_detector()
+        info["dlib_detector"] = "ready"
+    except Exception as e:
+        info["dlib_error"] = str(e)
+
+    # 2. Test face_recognition
+    try:
+        import face_recognition
+        import numpy as np
+        info["face_recognition"] = "imported"
+        # Test detection on a blank 100x100 RGB image
+        test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+        locs = face_recognition.face_locations(test_img, model="hog")
+        info["face_locations_test"] = f"passed ({len(locs)} faces)"
+    except Exception as e:
+        info["face_recognition_error"] = str(e)
+
+    # 3. Test memory
+    try:
+        import resource
+        info["max_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        pass
+
+    return jsonify(info)
+
 
 # ==========================================
 # BACKGROUND CAMERA STREAM RELAY

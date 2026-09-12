@@ -1,9 +1,12 @@
-﻿FROM python:3.11-slim
+FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     ENABLE_REMOTE_TUNNEL=false \
-    CMAKE_BUILD_PARALLEL_LEVEL=1
+    CMAKE_BUILD_PARALLEL_LEVEL=1 \
+    DLIB_NO_GUI_SUPPORT=1 \
+    DLIB_USE_CUDA=0 \
+    USE_AVX_INSTRUCTIONS=0
 
 # Install OS libraries for OpenCV, dlib and face_recognition
 RUN apt-get update && apt-get install -y --no-install-recommends \
