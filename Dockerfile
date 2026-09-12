@@ -33,9 +33,10 @@ RUN git clone --depth 1 https://github.com/davisking/dlib.git /tmp/dlib && \
     CMAKE_BUILD_PARALLEL_LEVEL=1 pip install --no-cache-dir /tmp/dlib && \
     rm -rf /tmp/dlib
 
-# 3. Install remaining Python requirements
+# 3. Install remaining Python requirements and official face models from git
 COPY requirements_hf.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir git+https://github.com/ageitgey/face_recognition_models.git
 
 # Copy all application code, known faces, database and static assets
 COPY . .

@@ -1,5 +1,13 @@
 import os
 import sys
+import builtins
+
+# Intercept quit() and exit() so third-party libraries (like face_recognition) can never kill the Flask process
+def _safe_quit(*args, **kwargs):
+    raise RuntimeError("quit() intercepted: an internal module tried to exit Python process")
+builtins.quit = _safe_quit
+builtins.exit = _safe_quit
+
 import time
 import datetime
 import pickle
