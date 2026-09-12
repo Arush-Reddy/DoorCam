@@ -28,9 +28,10 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 # 2. Build dlib from source explicitly WITHOUT AVX instructions to ensure 100% compatibility on cloud microVMs
 RUN git clone --depth 1 https://github.com/davisking/dlib.git /tmp/dlib && \
-    cd /tmp/dlib && \
-    python setup.py install --no USE_AVX_INSTRUCTIONS --no DLIB_USE_CUDA && \
-    cd /app && rm -rf /tmp/dlib
+    sed -i 's/set(AVX_IS_AVAILABLE_ON_HOST 1)/set(AVX_IS_AVAILABLE_ON_HOST 0)/g' /tmp/dlib/dlib/cmake_utils/check_if_avx_instructions_executable_on_host.cmake && \
+    sed -i 's/set(USE_AVX_INSTRUCTIONS ON/set(USE_AVX_INSTRUCTIONS OFF/g' /tmp/dlib/dlib/cmake_utils/set_compiler_specific_options.cmake && \
+    CMAKE_BUILD_PARALLEL_LEVEL=1 pip install --no-cache-dir /tmp/dlib && \
+    rm -rf /tmp/dlib
 
 # 3. Install remaining Python requirements
 COPY requirements_hf.txt requirements.txt
