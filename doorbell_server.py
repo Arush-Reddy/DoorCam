@@ -269,6 +269,7 @@ class CameraStreamRelay:
     def __init__(self):
         self.latest_frame = None
         self.last_frame_time = 0
+        self.fps = 0.0
         self.lock = threading.Lock()
         self.running = True
         self.thread = threading.Thread(target=self._worker, daemon=True)
@@ -277,8 +278,18 @@ class CameraStreamRelay:
     def push_frame(self, frame_bytes):
         """Allows remote ESP32 to push frames directly to cloud server."""
         with self.lock:
+            now = time.time()
+            if self.last_frame_time > 0:
+                dt = now - self.last_frame_time
+                if dt > 0:
+                    inst_fps = 1.0 / dt
+                    self.fps = round(self.fps * 0.7 + inst_fps * 0.3, 1)
             self.latest_frame = frame_bytes
-            self.last_frame_time = time.time()
+            self.last_frame_time = now
+
+    def is_active(self):
+        with self.lock:
+            return (self.latest_frame is not None) and ((time.time() - self.last_frame_time) < 4.0)
 
     def _worker(self):
         while self.running:
@@ -308,9 +319,7 @@ class CameraStreamRelay:
                         if end != -1:
                             jpg = buffer[:end+2]
                             buffer = buffer[end+2:]
-                            with self.lock:
-                                self.latest_frame = jpg
-                                self.last_frame_time = time.time()
+                            self.push_frame(jpg)
                     if len(buffer) > 1024 * 1024:
                         buffer = b""
             except Exception as e:
@@ -321,12 +330,48 @@ camera_relay = CameraStreamRelay()
 
 @app.route("/api/frame_push", methods=["POST"])
 def receive_pushed_frame():
-    """Allows ESP32 to push live stream frames directly to cloud."""
+    """Allows ESP32 to push individual live stream frames."""
     data = request.get_data()
     if data:
         camera_relay.push_frame(data)
         return "OK", 200
     return "No frame", 400
+
+@app.route("/api/stream_push", methods=["POST"])
+def receive_pushed_stream():
+    """Allows ESP32 to push continuous 15-20 FPS multipart/chunked live stream."""
+    try:
+        stream = request.stream
+        buffer = b""
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                break
+            buffer += chunk
+            start = buffer.find(b"\xff\xd8")
+            if start != -1:
+                buffer = buffer[start:]
+                end = buffer.find(b"\xff\xd9")
+                if end != -1:
+                    jpg = buffer[:end+2]
+                    buffer = buffer[end+2:]
+                    camera_relay.push_frame(jpg)
+            if len(buffer) > 2 * 1024 * 1024:
+                buffer = b""
+        return "OK", 200
+    except Exception as e:
+        logger.debug("Stream push ended: %s", e)
+        return "Closed", 200
+
+@app.route("/api/stream_status")
+def stream_status():
+    """Returns whether the ESP32 is actively streaming live video right now."""
+    active = camera_relay.is_active()
+    return jsonify({
+        "active": active,
+        "fps": getattr(camera_relay, "fps", 0),
+        "age_sec": round(time.time() - camera_relay.last_frame_time, 1) if camera_relay.last_frame_time else 999
+    })
 
 
 @app.route("/video_feed")
@@ -722,29 +767,29 @@ def app_home():
             <!-- CCTV Video Player -->
             <div class="cctv-card">
                 <div class="video-viewport">
-                    {% if esp32_ip %}
+                    {% if is_active_stream %}
                         <img id="cam-feed" class="camera-stream" src="/video_feed" onerror="handleStreamError(this)" alt="Live Feed">
                     {% elif latest_visit %}
                         <img id="cam-feed" class="camera-stream" src="/photo/{{ latest_visit['photo_path'] }}" alt="Latest Snapshot">
                     {% else %}
                         <div style="text-align:center; padding: 40px 20px; color: var(--text-muted);">
                             <div style="font-size: 36px; margin-bottom: 8px;">📹</div>
-                            <div style="font-size: 14px; font-weight: 600; color: #fff;">Camera Waiting for Connection</div>
-                            <div style="font-size: 12px; margin-top: 4px;">Set ESP32 IP in ⚙️ settings or trigger a test snapshot</div>
+                            <div style="font-size: 14px; font-weight: 600; color: #fff;">Camera Standby</div>
+                            <div style="font-size: 12px; margin-top: 4px;">Press doorbell button to stream live video</div>
                         </div>
                     {% endif %}
 
                     <!-- Viewport Overlays -->
                     <div class="viewport-overlay-top">
-                        <div class="live-tag">
+                        <div class="live-tag" style="background: {{ 'rgba(239, 68, 68, 0.95)' if is_active_stream else 'rgba(100, 116, 139, 0.7)' }};">
                             <div class="live-dot"></div>
-                            <span id="live-label">{{ 'LIVE' if esp32_ip else 'STANDBY' }}</span>
+                            <span id="live-label">{{ '● LIVE STREAM' if is_active_stream else 'STANDBY' }}</span>
                         </div>
                         <div class="timestamp-overlay" id="live-clock">--:--:--</div>
                     </div>
 
                     <div class="viewport-overlay-bottom">
-                        <div class="cam-meta">OV3660 HD • AI Face Recognition</div>
+                        <div class="cam-meta" id="cam-meta-text">OV3660 HD • AI Face Recognition</div>
                     </div>
                 </div>
             </div>
@@ -1103,9 +1148,41 @@ def app_home():
                 }
             }
 
-            // Periodic check for tunnel URL
-            setInterval(updateTunnelStatus, 8000);
-            updateTunnelStatus();
+            // Auto Stream Switcher: Automatically switches to 15-20 FPS live video on doorbell ring
+            let isStreamingLive = false;
+            let currentSnapshotUrl = '{{ ("/photo/" + latest_visit["photo_path"]) if latest_visit else "" }}';
+
+            function checkStreamStatus() {
+                fetch('/api/stream_status')
+                    .then(r => r.json())
+                    .then(data => {
+                        const img = document.getElementById('cam-feed');
+                        const label = document.getElementById('live-label');
+                        const meta = document.getElementById('cam-meta-text');
+                        if (!img || !label) return;
+
+                        if (data.active) {
+                            if (!isStreamingLive) {
+                                isStreamingLive = true;
+                                img.src = '/video_feed?' + Date.now();
+                            }
+                            label.textContent = '● LIVE (' + (data.fps > 0 ? data.fps + ' FPS' : '30s') + ')';
+                            label.parentElement.style.background = 'rgba(239, 68, 68, 0.95)';
+                            if (meta) meta.textContent = 'Live Cloud Stream • ' + data.fps + ' FPS';
+                        } else {
+                            if (isStreamingLive) {
+                                isStreamingLive = false;
+                                if (currentSnapshotUrl) img.src = currentSnapshotUrl;
+                            }
+                            label.textContent = 'STANDBY';
+                            label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
+                            if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
+                        }
+                    })
+                    .catch(() => {});
+            }
+            setInterval(checkStreamStatus, 1500);
+            checkStreamStatus();
 
             function saveConfig() {
                 const ip = document.getElementById('input-cam-ip').value;
@@ -1128,7 +1205,9 @@ def app_home():
         known_count=known_count,
         esp32_ip=config.ESP32_CAM_IP,
         ntfy_topic=config.NTFY_TOPIC,
-        tunnel_url=tunnel.get_public_url()
+        tunnel_url=tunnel.get_public_url(),
+        latest_visit=latest_visit,
+        is_active_stream=camera_relay.is_active()
     )
 
 @app.route("/photo/<path:filename>")
