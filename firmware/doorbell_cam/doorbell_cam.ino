@@ -161,6 +161,77 @@ void startCameraServer() {
   }
 }
 
+// 15-20 FPS Live Cloud Stream Burst (Option C: 30-second stream on ring)
+void streamCloudBurst(int durationSeconds) {
+  Serial.printf("\n[STREAM] Starting %d-second live cloud stream at ~15-20 FPS to %s...\n", durationSeconds, serverHost);
+
+  bool isHttps = (serverPort == 443);
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  WiFiClient *clientPtr = nullptr;
+
+  if (isHttps) {
+    secureClient.setInsecure();
+    secureClient.setTimeout(4000);
+    clientPtr = &secureClient;
+  } else {
+    plainClient.setTimeout(2500);
+    clientPtr = &plainClient;
+  }
+
+  if (!clientPtr->connect(serverHost, serverPort)) {
+    Serial.println("[STREAM WARN] Could not connect to cloud stream endpoint.");
+    return;
+  }
+
+  clientPtr->print(String("POST /api/stream_push HTTP/1.1\r\n") +
+                   "Host: " + String(serverHost) + "\r\n" +
+                   "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n" +
+                   "Connection: close\r\n\r\n");
+
+  unsigned long startTime = millis();
+  unsigned long durationMs = (unsigned long)durationSeconds * 1000UL;
+  int framesSent = 0;
+
+  while (millis() - startTime < durationMs) {
+    if (!clientPtr->connected()) {
+      Serial.println("[STREAM] Connection closed by remote server.");
+      break;
+    }
+
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (!fb) {
+      delay(20);
+      continue;
+    }
+
+    // Stream multipart JPEG frame
+    clientPtr->print("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + String(fb->len) + "\r\n\r\n");
+    clientPtr->write(fb->buf, fb->len);
+    clientPtr->print("\r\n");
+
+    esp_camera_fb_return(fb);
+    framesSent++;
+
+    // Blink status LED every 10 frames for live activity indicator
+    if (framesSent % 10 == 0) {
+      digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+    }
+
+    // 15-20 FPS pacing (~45ms yield)
+    delay(45);
+  }
+
+  clientPtr->print("--frame--\r\n");
+  clientPtr->stop();
+  digitalWrite(STATUS_LED_PIN, HIGH); // OFF
+
+  unsigned long totalMs = millis() - startTime;
+  float fps = (totalMs > 0) ? ((float)framesSent / (totalMs / 1000.0f)) : 0;
+  Serial.printf("[STREAM COMPLETE] Sent %d frames in %.1fs (average %.1f FPS). Standby armed.\n", 
+                framesSent, totalMs / 1000.0f, fps);
+}
+
 // Direct JPEG snapshot push to server (supports both local PC and Cloud/AWS servers!)
 bool triggerDoorbell(const char* triggerType) {
   Serial.printf("\n[EVENT] Doorbell triggered by: %s!\n", triggerType);
@@ -219,6 +290,12 @@ bool triggerDoorbell(const char* triggerType) {
 
   esp_camera_fb_return(fb);
   digitalWrite(STATUS_LED_PIN, HIGH); // OFF
+
+  // Option C: If button pressed, stream live video to cloud for 30 seconds at 15-20 FPS!
+  if (strcmp(triggerType, "BUTTON") == 0) {
+    streamCloudBurst(30);
+  }
+
   return true;
 }
 
