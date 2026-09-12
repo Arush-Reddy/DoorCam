@@ -163,7 +163,7 @@ void startCameraServer() {
 
 // 15-20 FPS Live Cloud Stream Burst (Option C: 30-second stream on ring)
 void streamCloudBurst(int durationSeconds) {
-  Serial.printf("\n[STREAM] Starting %d-second live cloud stream at ~15-20 FPS to %s...\n", durationSeconds, serverHost);
+  Serial.printf("\n[STREAM] Starting %d-second live cloud stream to %s...\n", durationSeconds, serverHost);
 
   bool isHttps = (serverPort == 443);
   WiFiClient plainClient;
@@ -172,10 +172,10 @@ void streamCloudBurst(int durationSeconds) {
 
   if (isHttps) {
     secureClient.setInsecure();
-    secureClient.setTimeout(4000);
+    secureClient.setTimeout(2500);
     clientPtr = &secureClient;
   } else {
-    plainClient.setTimeout(2500);
+    plainClient.setTimeout(2000);
     clientPtr = &plainClient;
   }
 
@@ -184,19 +184,16 @@ void streamCloudBurst(int durationSeconds) {
     return;
   }
 
-  clientPtr->print(String("POST /api/stream_push HTTP/1.1\r\n") +
-                   "Host: " + String(serverHost) + "\r\n" +
-                   "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n" +
-                   "Connection: close\r\n\r\n");
-
   unsigned long startTime = millis();
   unsigned long durationMs = (unsigned long)durationSeconds * 1000UL;
   int framesSent = 0;
 
   while (millis() - startTime < durationMs) {
     if (!clientPtr->connected()) {
-      Serial.println("[STREAM] Connection closed by remote server.");
-      break;
+      if (!clientPtr->connect(serverHost, serverPort)) {
+        delay(60);
+        continue;
+      }
     }
 
     camera_fb_t * fb = esp_camera_fb_get();
@@ -205,24 +202,34 @@ void streamCloudBurst(int durationSeconds) {
       continue;
     }
 
-    // Stream multipart JPEG frame
-    clientPtr->print("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + String(fb->len) + "\r\n\r\n");
+    // Push frame with exact Content-Length so proxy accepts it cleanly
+    clientPtr->print(String("POST /api/frame_push HTTP/1.1\r\n") +
+                     "Host: " + String(serverHost) + "\r\n" +
+                     "Content-Type: image/jpeg\r\n" +
+                     "Content-Length: " + String(fb->len) + "\r\n" +
+                     "Connection: keep-alive\r\n\r\n");
     clientPtr->write(fb->buf, fb->len);
-    clientPtr->print("\r\n");
 
     esp_camera_fb_return(fb);
     framesSent++;
 
-    // Blink status LED every 10 frames for live activity indicator
-    if (framesSent % 10 == 0) {
+    // Quick ACK flush (read 200 OK without blocking)
+    unsigned long ackWait = millis();
+    while (clientPtr->connected() && millis() - ackWait < 100) {
+      if (clientPtr->available()) {
+        String line = clientPtr->readStringUntil('\n');
+        if (line.indexOf("200") >= 0) break;
+      }
+    }
+
+    // Blink status LED every 8 frames for live activity feedback
+    if (framesSent % 8 == 0) {
       digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
     }
 
-    // 15-20 FPS pacing (~45ms yield)
-    delay(45);
+    delay(30); // ~15 FPS smooth rate
   }
 
-  clientPtr->print("--frame--\r\n");
   clientPtr->stop();
   digitalWrite(STATUS_LED_PIN, HIGH); // OFF
 
