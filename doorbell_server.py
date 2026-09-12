@@ -1,5 +1,6 @@
 import os
 import sys
+import types
 import builtins
 
 # Intercept quit() and exit() so third-party libraries (like face_recognition) can never kill the Flask process
@@ -7,6 +8,20 @@ def _safe_quit(*args, **kwargs):
     raise RuntimeError("quit() intercepted: an internal module tried to exit Python process")
 builtins.quit = _safe_quit
 builtins.exit = _safe_quit
+
+# Ensure pkg_resources is always available for face_recognition_models in Python 3.11+
+try:
+    import pkg_resources
+except ImportError:
+    class MockPkgResources(types.ModuleType):
+        def resource_filename(self, package_or_requirement, resource_name):
+            mod_name = getattr(package_or_requirement, '__name__', str(package_or_requirement))
+            for p in sys.path:
+                cand = os.path.join(p, *mod_name.split('.'), resource_name)
+                if os.path.exists(cand):
+                    return cand
+            return os.path.abspath(resource_name)
+    sys.modules['pkg_resources'] = MockPkgResources('pkg_resources')
 
 import time
 import datetime
