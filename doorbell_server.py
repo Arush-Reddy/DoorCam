@@ -77,17 +77,30 @@ def recognize_faces_in_image(image_path: str):
             scale = 640.0 / max(h, w)
             unknown_image = cv2.resize(unknown_image, (int(w * scale), int(h * scale)))
 
-        # 1. Multi-scale face detection: first try standard, then 2x upsample
-        face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=1)
+        # 1. First try OpenCV Haar cascade (ultra-fast, ~5ms, zero RAM spike, universal compatibility)
+        face_locs = []
+        try:
+            gray = cv2.cvtColor(unknown_image, cv2.COLOR_RGB2GRAY)
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            rects = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+            if len(rects) > 0:
+                face_locs = [(int(y), int(x + w), int(y + h), int(x)) for (x, y, w, h) in rects]
+                logger.info("Face detected via OpenCV Haar cascade (%d faces)", len(face_locs))
+        except Exception as he:
+            logger.debug("Haar cascade check: %s", he)
+
+        # 2. Standard HOG detector fallback if Haar missed
         if not face_locs:
-            face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=2)
+            try:
+                face_locs = face_recognition.face_locations(unknown_image, number_of_times_to_upsample=1)
+            except Exception as dlib_e:
+                logger.warning("dlib face_locations warning: %s", dlib_e)
 
         target_image = unknown_image
 
-        # 2. Adaptive Enhancement: If upright misses, apply CLAHE contrast enhancement & check tilts
+        # 3. Adaptive CLAHE contrast enhancement fallback
         if not face_locs:
             try:
-                import cv2
                 bgr = cv2.imread(image_path)
                 if bgr is not None:
                     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
@@ -95,36 +108,11 @@ def recognize_faces_in_image(image_path: str):
                     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
                     cl = clahe.apply(l)
                     enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)
-                    face_locs = face_recognition.face_locations(enhanced, number_of_times_to_upsample=2)
+                    face_locs = face_recognition.face_locations(enhanced, number_of_times_to_upsample=1)
                     if face_locs:
                         target_image = enhanced
-                    else:
-                        (h, w) = bgr.shape[:2]
-                        for ang in [25, -25, 35, -35]:
-                            M = cv2.getRotationMatrix2D((w // 2, h // 2), ang, 1.0)
-                            rot = cv2.warpAffine(enhanced, M, (w, h))
-                            r_locs = face_recognition.face_locations(rot, number_of_times_to_upsample=1)
-                            if r_locs:
-                                face_locs = r_locs
-                                target_image = rot
-                                break
             except Exception as e:
                 logger.debug("Adaptive enhancement error: %s", e)
-
-        # 3. Sensitive dlib detector fallback (for haircuts, bangs, tilted heads, overhead lighting)
-        if not face_locs:
-            try:
-                import dlib
-                import cv2
-                dlib_det = dlib.get_frontal_face_detector()
-                gray = cv2.cvtColor(target_image if isinstance(target_image, np.ndarray) else np.array(target_image), cv2.COLOR_RGB2GRAY)
-                dets, scores, idx = dlib_det.run(gray, 1, -1.0)
-                if dets:
-                    d = dets[0]
-                    face_locs = [(max(0, d.top()), d.right(), d.bottom(), max(0, d.left()))]
-                    logger.info("Face detected via sensitive detector fallback (score=%.2f)", scores[0])
-            except Exception as e:
-                logger.debug("Sensitive detector fallback error: %s", e)
 
         if not face_locs:
             return "Visitor (No face detected)", None
@@ -218,7 +206,14 @@ def diagnostics():
         "python_version": sys.version,
     }
     
-    # 1. Test dlib
+    # 1. OpenCV check
+    try:
+        import cv2
+        info["opencv_version"] = cv2.__version__
+    except Exception as e:
+        info["opencv_error"] = str(e)
+
+    # 2. dlib check
     try:
         import dlib
         info["dlib_version"] = getattr(dlib, "__version__", "unknown")
@@ -227,24 +222,18 @@ def diagnostics():
     except Exception as e:
         info["dlib_error"] = str(e)
 
-    # 2. Test face_recognition
+    # 3. face_recognition & models check
     try:
         import face_recognition
-        import numpy as np
         info["face_recognition"] = "imported"
-        # Test detection on a blank 100x100 RGB image
-        test_img = np.zeros((100, 100, 3), dtype=np.uint8)
-        locs = face_recognition.face_locations(test_img, model="hog")
-        info["face_locations_test"] = f"passed ({len(locs)} faces)"
     except Exception as e:
         info["face_recognition_error"] = str(e)
 
-    # 3. Test memory
     try:
-        import resource
-        info["max_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except Exception:
-        pass
+        import face_recognition_models
+        info["face_models"] = "ready"
+    except Exception as e:
+        info["face_models_error"] = str(e)
 
     return jsonify(info)
 

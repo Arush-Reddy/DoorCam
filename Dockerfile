@@ -12,6 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
+    git \
     libopenblas-dev \
     liblapack-dev \
     libx11-dev \
@@ -21,11 +22,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python requirements with single-threaded compilation to stay under 400MB RAM
-COPY requirements_hf.txt requirements.txt
+# 1. Install base python tools & numpy
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir numpy && \
-    CMAKE_BUILD_PARALLEL_LEVEL=1 pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir numpy
+
+# 2. Build dlib from source explicitly WITHOUT AVX instructions to ensure 100% compatibility on cloud microVMs
+RUN git clone --depth 1 https://github.com/davisking/dlib.git /tmp/dlib && \
+    cd /tmp/dlib && \
+    python setup.py install --no USE_AVX_INSTRUCTIONS --no DLIB_USE_CUDA && \
+    cd /app && rm -rf /tmp/dlib
+
+# 3. Install remaining Python requirements
+COPY requirements_hf.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all application code, known faces, database and static assets
 COPY . .
