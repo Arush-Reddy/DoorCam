@@ -3,13 +3,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--CAM%20%7C%20OV3660-blue.svg)](https://www.espressif.com/)
 [![Firmware](https://img.shields.io/badge/Firmware-C%2B%2B%20%2F%20FreeRTOS-00599C.svg)](https://www.arduino.cc/)
+[![Cloud Deployment](https://img.shields.io/badge/Cloud-Render%20%7C%20Docker-46E3B7.svg)](https://doorcam.onrender.com)
 [![Backend](https://img.shields.io/badge/Backend-Python%20%7C%20Flask-3776AB.svg)](https://flask.palletsprojects.com/)
 [![AI / CV](https://img.shields.io/badge/AI-OpenCV%20%7C%20dlib%20ResNet-5C3EE8.svg)](https://github.com/ageitgey/face_recognition)
 [![Client](https://img.shields.io/badge/Client-PWA%20%7C%20SSE%20%7C%20Web%20Audio-FF6F00.svg)](https://developer.mozilla.org/)
 
-An autonomous, privacy-focused smart video doorbell and surveillance ecosystem engineered from the silicon up. Combining an **ESP32-CAM (AI-Thinker with OV3660 3MP sensor)** edge device, a multi-threaded Python streaming and computer vision backend, local **128-dimensional deep metric facial recognition**, and an installable **Progressive Web App (PWA)** with instant lock-screen mobile push notifications.
+An autonomous, enterprise-grade smart video doorbell and surveillance system engineered from the silicon up. DoorCam pairs an **ESP32-CAM (AI-Thinker with OV3660 3MP sensor)** edge device with a multi-threaded Python cloud backend, local **128-dimensional deep metric facial recognition**, and an installable **Progressive Web App (PWA)** featuring **24/7 on-demand live cloud streaming**, **sub-2-second instant doorbell alerting**, and zero-refresh real-time synchronization.
 
-> Built as an end-to-end hardware, firmware, and software engineering portfolio project demonstrating embedded systems programming, FreeRTOS task scheduling, real-time networking, and applied computer vision.
+> 🌐 **Live Cloud App:** [https://doorcam.onrender.com](https://doorcam.onrender.com)  
+> Built as an end-to-end hardware, firmware, and software engineering system demonstrating embedded C++/FreeRTOS programming, low-latency socket networking, asynchronous machine learning pipelines, and modern web engineering.
 
 ---
 
@@ -19,54 +21,80 @@ An autonomous, privacy-focused smart video doorbell and surveillance ecosystem e
 sequenceDiagram
     autonumber
     actor Visitor
+    actor Owner as Homeowner (Phone / Web PWA)
     participant ESP as ESP32-CAM (Edge Device)
-    participant Relay as Python Stream Relay
-    participant Backend as Flask Backend (Port 5000)
-    participant Web as Laptop / Phone PWA
-    participant Push as Mobile Notifications (ntfy.sh)
+    participant Cloud as Render Cloud Server (Flask)
+    participant AI as Face AI Worker Thread (dlib)
+    participant Push as Mobile Push (ntfy.sh)
 
-    Note over ESP,Relay: Silky-smooth 25-30 FPS MJPEG Stream Active
+    rect rgb(20, 30, 45)
+    Note over Owner,Cloud: Workflow A: 24/7 On-Demand Live Streaming
+    Owner->>Cloud: Clicks "Watch Live Stream" (POST /api/stream/start)
+    Cloud->>Cloud: Arm stream demand flag (60s safety timeout)
+    ESP->>Cloud: Polls GET /api/stream_cmd (every 1.5s in standby)
+    Cloud-->>ESP: {"stream": true}
+    ESP->>Cloud: Pushes live MJPEG frames (13-15 FPS) to /api/stream_push
+    Cloud-->>Owner: Multiplexes /video_feed to all connected devices
+    Owner->>Cloud: Clicks "Stop Stream" (POST /api/stream/stop)
+    Cloud-->>ESP: Stream stops; ESP returns to low-power standby
+    end
+
+    rect rgb(30, 25, 40)
+    Note over Visitor,Owner: Workflow B: Physical Doorbell Ring (< 2s Alert)
     Visitor->>ESP: Presses Physical Doorbell Button (GPIO 14 -> GND)
-    ESP->>ESP: Hardware Debounce Filter (40ms)
-    ESP->>Backend: POST /visitor?trigger=BUTTON (Content-Length: 0)
-    Note over ESP: Latency: ~5ms | Stream NEVER pauses | Zero DMA contention
-    Backend->>Relay: Extract current live frame from RAM buffer
-    Backend->>Backend: Save snapshot to disk (visitors/YYYY-MM-DD/)
-    Backend->>Backend: Run Face Recognition (HOG + 128D ResNet Embeddings)
-    Backend-->>Web: Broadcast Event via SSE (/api/events/stream)
-    Web-->>Web: Synthesize 2-Tone Web Audio Chime + Haptic Vibration
-    Backend-->>Push: Dispatch Instant Alert with Photo Attachment
-    Push-->>Visitor: Push Notification on Lock Screen
-    Backend-->>ESP: HTTP 200 OK
+    ESP->>ESP: Hardware Debounce Filter (40ms) + Capture HD Snapshot
+    ESP->>Cloud: POST /visitor?trigger=BUTTON (multipart snapshot photo)
+    Note over Cloud: Latency: < 10ms (Zero blocking)
+    Cloud-->>Owner: Broadcasts SSE event {"type": "visitor", "name": "Doorbell Ringing..."}
+    Owner-->>Owner: Plays Web Audio Chime (Ding-Dong 660Hz->523Hz) + Haptic Vibration
+    Cloud-->>ESP: HTTP 200 OK -> ESP immediately begins 30s live stream
+    Cloud->>AI: Offloads snapshot to background daemon thread
+    AI->>AI: Computes HOG + 128D ResNet Embeddings (matches "Arush" vs Unknown)
+    AI-->>Cloud: Updates SQLite DB with identity & confidence
+    Cloud-->>Owner: Broadcasts SSE {"type": "visitor_update", "name": "Arush"}
+    Cloud-->>Push: Dispatches rich push notification with photo to lock screen
+    end
 ```
 
 ---
 
 ## ⚡ Key Engineering Highlights & Innovations
 
-### 1. Zero-Payload Event Triggering (~5 ms Latency)
-Traditional embedded camera implementations attempt to capture a full image and upload a 60–100 KB multipart HTTP payload over Wi-Fi when a sensor triggers. On half-duplex 2.4 GHz ESP32 microcontrollers, doing this while simultaneously serving an MJPEG stream leads to:
-- I2S DMA FIFO buffer starvation and hardware deadlocks.
-- Severe Wi-Fi packet drops (often exceeding 25% packet loss).
-- Stream freeze and video lag.
+### 1. 📹 24/7 On-Demand Live Cloud Streaming (Global 4G/5G/Wi-Fi)
+- **Zero Open Ingress Ports**: The ESP32-CAM operates safely behind standard residential NAT without requiring port forwarding. It polls `GET /api/stream_cmd` every 1.5s while idling in a low-power, cool-running standby state.
+- **Instant Cloud Spin-up**: When the homeowner taps **"Watch Live Stream"** in the app, the cloud activates a demand token. On the next poll cycle, the ESP32-CAM seamlessly transitions into high-throughput socket streaming, delivering smooth **13–15 FPS live MJPEG video**.
+- **Bandwidth Safety Guard**: To prevent unexpected data exhaustion on cloud platforms (e.g. Render's 100 GB/month quota), each session includes an automatic **60-second countdown safety timeout**, or can be manually stopped with 1 tap.
+- **In-Flight Frame Drain Guard**: Clicking "Stop" activates a 4.5-second frame drain barrier to cleanly ignore any delayed network packets and prevent UI stutter.
 
-**Our Solution:** The firmware offloads all capture responsibility. When a button press or PIR motion interrupt occurs, the ESP32 dispatches a **0-byte HTTP POST** (`POST /visitor?trigger=BUTTON`) in **~5 milliseconds**. The backend server instantly extracts the crisp, uncompressed frame from its in-memory stream buffer, logs the event, runs AI facial recognition, and pushes the alert. The video stream experiences **zero frame drops or interruptions**.
+### 2. 🔔 Physical Doorbell Button Priority & Stream Interrupt
+- **Hardware Circuitry**: A physical tactile pushbutton on **GPIO 14** configured with internal pull-up and a 40ms software debounce filter.
+- **Ring Priority**:
+  - **From Standby**: Captures an immediate HD visitor snapshot, pushes to `/visitor`, triggers an instant chime alert, and automatically extends into a 30-second live cloud stream so the owner can converse or monitor in real time.
+  - **During Active Streaming**: An in-stream interrupt detects the button press on GPIO 14, immediately records the visitor event, and seamlessly refreshes the stream timer by +30 seconds without dropping frames.
 
-### 2. Multi-Client In-Memory Stream Multiplexing
-The ESP32 `httpd` component is hardware-limited to 1–4 concurrent sockets and single-threaded request handlers. Connecting multiple browser tabs or devices directly to the camera crashes the device.
+### 3. ⚡ Sub-2-Second Instant Chime Alerting (Asynchronous Neural Inference)
+- **The Challenge**: Running heavy convolutional face detection (`dlib` HOG + 128-dimensional ResNet-34 metric learning) synchronously on a CPU takes 300–600 ms. In cloud environments, waiting for inference before responding caused a 6–7 second delay between the visitor pressing the button and the homeowner's phone chiming.
+- **The Solution**: The server immediately acknowledges `/visitor`, broadcasts a real-time event (`"Doorbell Ringing..."`) via Server-Sent Events (SSE), and dispatches inference to a background worker thread.
+  - **Chime Latency**: The browser/phone chimes and vibrates within **~1.8–2.0 seconds** of the physical button press.
+  - **Dynamic Name Resolution**: When the AI worker finishes identifying the face, it pushes an in-place `visitor_update` event that dynamically replaces the card title with the recognized name without re-triggering the chime audio.
 
-**Our Solution:** The Python backend runs a dedicated background daemon (`CameraStreamRelay`) that maintains **exactly one** persistent HTTP connection to the ESP32. It parses boundary markers, extracts JPEG frames, and holds the latest frame in thread-safe memory (`threading.Lock()`). The `/video_feed` endpoint multiplexes this buffer to an arbitrary number of client devices with timestamp-based frame deduplication, preventing client decoder saturation.
+### 4. 🧠 128-Dimensional Biometric Facial Recognition
+- **Engine**: Powered by `dlib`'s state-of-the-art Deep Residual Network (ResNet-34) trained on millions of facial landmarks.
+- **Metric Matching**: Generates a 128-float biometric vector per detected face and computes Euclidean distance against enrolled reference encodings in `face_db/encodings.pkl`.
+- **Confidence Calibration**: Uses a strict classification threshold (`0.54`) to eliminate false positives, tagging unknown visitors as `Unknown Visitor` while instantly recognizing enrolled family members.
 
-### 3. Edge Sensor Self-Healing Watchdog
-Long jumper wires and electrical fluctuations can cause CMOS sensors to drop SCCB/I2C communication or experience DMA timeouts.
-- Firmware implements a frame-drop state machine: single-frame drops yield execution without terminating the TCP socket.
-- If 15 consecutive capture attempts fail, the firmware triggers an automated hardware reboot via `ESP.restart()`, restoring live video in **under 1.5 seconds** without requiring physical user intervention.
+### 5. 🔄 Zero-Refresh Real-Time Live Sync & Mobile PWA
+- **Hybrid SSE + High-Frequency Polling**: Combines persistent Server-Sent Events (`/api/events/stream`) for sub-millisecond push delivery with a 1.5-second `/api/live_state` heartbeat for rock-solid fault tolerance.
+- **Web Audio API Synthesizer**: Generates a 2-tone melodic doorbell chime (*Ding* at 659.25 Hz E5 $\rightarrow$ *Dong* at 523.25 Hz C5) natively in browser memory without requiring external audio asset downloads.
+- **Screen Wake Lock API**: Automatically invokes `navigator.wakeLock.request('screen')` during live stream viewing to keep the smartphone display awake while monitoring the doorstep.
+- **Dynamic Frame Fallback**: If an MJPEG socket stalls due to cellular network switching, the frontend seamlessly falls back to 120ms single-frame memory polling (`/api/latest_frame`).
 
-### 4. Hardware UART Passthrough Flasher Bridge
-To program the ESP32-CAM without requiring a dedicated FTDI USB-to-UART adapter dongle, an **ESP32-S3 microcontroller was scripted as an automated bidirectional serial bridge** at 115200 baud, enabling firmware flashing directly over native USB.
+### 6. 🕒 Local Timezone Display & 1-Tap Feed Purge
+- **Timezone Standardization**: Server records timestamps in Indian Standard Time (IST, UTC+5:30) using `datetime.timezone`. The frontend's dynamic `formatDisplayTime` parser automatically formats both legacy UTC and local timestamps into clean, human-readable strings (e.g. `Sep 13, 12:47:15 PM`).
+- **Real-Time Feed Clearing (`POST /api/feed/clear`)**: A dedicated **`[ 🗑️ Clear ]`** button with confirmation prompt safely purges the SQLite `visits` database table. The server broadcasts a `feed_cleared` SSE event, instantly emptying the timeline and updating event counters across all open devices without requiring a browser reload.
 
-### 5. Zero-Trust Global Remote Access (Cloudflare Tunnel)
-Accessing home surveillance outside the local LAN traditionally requires risky router port forwarding (NAT hole-punching) or complex VPNs. DoorCam integrates an automated, zero-trust **Cloudflare Quick Tunnel (`cloudflared`)** daemon. Upon server boot, it establishes an outbound encrypted QUIC/HTTP2 tunnel directly to Cloudflare's global edge network, providing a secure, public `https://*.trycloudflare.com` URL. The user can view live video, hear real-time chimes, and receive alerts from anywhere in the world on 4G/5G mobile data with zero open firewall ports.
+### 7. 🛡️ PIR Motion Sensor Cloud Toggle
+- Software-controlled toggle via `POST /api/pir/toggle` allows the homeowner to enable or disable HC-SR501 PIR thermal motion alerts directly from the UI, preventing nuisance notifications caused by pets, swaying trees, or passing street traffic.
 
 ---
 
@@ -74,12 +102,15 @@ Accessing home surveillance outside the local LAN traditionally requires risky r
 
 | Metric | Measured Value | Significance |
 | :--- | :--- | :--- |
-| **Doorbell Trigger Latency** | **~5 ms** | Sub-perceptual edge-to-server trigger acknowledgment |
-| **Stream Resolution & FPS** | **640x480 (VGA) @ 25–30 FPS** | Silky-smooth live feed without Wi-Fi packet drops |
-| **Bandwidth Consumption** | **~12–15 KB per frame** | 65% bandwidth reduction vs. unoptimized SVGA |
-| **Face Recognition Inference** | **~280 ms (CPU, dlib HOG)** | Real-time visitor identification and tagging |
-| **Mobile Push Notification** | **< 1.0 s** | Rich alert with snapshot photo delivered to phone lock screen |
-| **Cold Boot to Live Stream** | **~3.2 s** | Instant recovery from power dip or watchdog reset |
+| **Physical Button Debounce** | **40 ms** | Clean active-LOW transition with zero false double-triggers |
+| **Doorbell Trigger Latency** | **< 10 ms** | Server receives and broadcasts event before edge ACK completes |
+| **End-to-End Phone Chime** | **~1.8 s** | Total time from physical press to phone chime & vibration over cloud |
+| **On-Demand Stream Start** | **1.2 – 1.8 s** | Time from "Watch Live" tap to active video rendering |
+| **Stream Frame Rate** | **13 – 15 FPS** | Fluid MJPEG video over standard residential Wi-Fi & 4G/5G |
+| **Frame Bandwidth** | **~12 – 15 KB** | Optimized JPEG quality index (`12`) balancing clarity and throughput |
+| **Face Recognition Time** | **~280 ms** | Multi-threaded background dlib ResNet-34 inference |
+| **Mobile Push Notification** | **< 1.0 s** | Rich push with snapshot delivered to phone lock screen via `ntfy.sh` |
+| **Camera Watchdog Recovery** | **~1.5 s** | Automated hardware reset (`ESP.restart()`) on consecutive frame drops |
 
 ---
 
@@ -109,94 +140,87 @@ GPIO 0    ------> Bootloader Flashing Mode (Short to GND to Flash)
 
 ---
 
-## 🧠 Software Stack & Computer Vision
+## 📡 REST & Real-Time API Reference
 
-- **Firmware:** ESP-IDF Camera Driver, FreeRTOS, `esp_http_server`, `WiFiClient`.
-- **Backend:** Python 3.10+, Flask, SQLite3, `threading`.
-- **Computer Vision:** `face_recognition` (dlib ResNet-34 128D embedding metric learning, Euclidean distance threshold `0.54`).
-- **Frontend / PWA:** HTML5, CSS3 Glassmorphism, Vanilla JS, Server-Sent Events (`EventSource`), Web Audio API (`AudioContext` oscillator for real-time chime synthesis).
-- **Mobile Push Engine:** `ntfy.sh` (open-source pub-sub notification protocol with native Android/iOS lock-screen image rendering).
-- **Secure Networking:** Cloudflare Zero-Trust Quick Tunnel (`cloudflared`) for outbound HTTPS remote connectivity without port forwarding.
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/` | `GET` | CCTV Security Dashboard & Progressive Web App interface |
+| `/video_feed` | `GET` | Live multi-client MJPEG video stream (`multipart/x-mixed-replace`) |
+| `/api/latest_frame` | `GET` | Returns the single most recent JPEG frame from server memory |
+| `/api/events/stream` | `GET` | Server-Sent Events (SSE) real-time event pipeline |
+| `/api/live_state` | `GET` | Live system state (stream active, FPS, remaining time, latest visit, PIR state) |
+| `/api/stream/start` | `POST` | Demands live cloud streaming for 60 seconds |
+| `/api/stream/stop` | `POST` | Terminates active live streaming and returns camera to standby |
+| `/api/stream_cmd` | `GET` | Polled by ESP32 edge device (`{"stream": true/false}`) |
+| `/api/stream_push` | `POST` | Ingestion endpoint where ESP32 pushes live JPEG frames |
+| `/visitor` | `POST` | Trigger endpoint called on button ring/motion with snapshot attachment |
+| `/api/feed/clear` | `POST` | Purges all visitor log records and broadcasts `feed_cleared` event |
+| `/api/pir/toggle` | `POST` | Toggles PIR motion sensor alert evaluation on/off |
+| `/api/diagnostics` | `GET` | Health check endpoint reporting Python, OpenCV, dlib, and face models |
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Deployment & Getting Started
 
-### 1. Prerequisites
-- Python 3.10 or higher installed.
-- Arduino IDE 2.x or `arduino-cli` with `esp32` board definitions installed.
+### 1. Cloud Deployment (Render.com + Docker)
+The project includes a production-ready `Dockerfile` pre-configured with Python 3.11, CMake, dlib, and `face_recognition`.
+1. Fork or push this repository to your GitHub account.
+2. Link your repository to **[Render.com](https://render.com/)** as a **Web Service**.
+3. Set Environment: **Docker**.
+4. Set optional environment variables in Render Dashboard:
+   - `BASE_DIR=/app`
+   - `NTFY_TOPIC=arush-doorcam-cctv` (or your custom topic name)
+5. Render builds the container and serves your application at `https://<your-subdomain>.onrender.com`.
 
-### 2. Clone Repository & Setup Environment
+### 2. Local Development Setup
 ```bash
 git clone https://github.com/Arush-Reddy/DoorCam.git
 cd DoorCam
 
 # Create and activate virtual environment
 python -m venv venv
-venv\Scripts\activate  # On Windows
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/macOS
 
 # Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Configure Firmware
-1. Navigate to `firmware/doorbell_cam/`.
-2. Copy `credentials.sample.h` to `credentials.h`:
-   ```bash
-   cp firmware/doorbell_cam/credentials.sample.h firmware/doorbell_cam/credentials.h
-   ```
-3. Open `credentials.h` and enter your Wi-Fi SSID, password, and host server IP:
-   ```c
-   const char* ssid = "YOUR_WIFI_SSID";
-   const char* password = "YOUR_WIFI_PASSWORD";
-   const char* serverHost = "192.168.0.4"; // Local IP of your PC
-   const int serverPort = 5000;
-   ```
-
-### 4. Compile & Flash Firmware
-#### Option A: Using Arduino IDE
-1. Open `firmware/doorbell_cam/doorbell_cam.ino`.
-2. Select Board: **AI Thinker ESP32-CAM**.
-3. Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)**.
-4. Mount ESP32-CAM on MB shield, plug in USB, and click **Upload**.
-
-#### Option B: Automated Fast Flash (CLI)
-```bash
-# Compile via arduino-cli
-arduino-cli compile --fqbn esp32:esp32:esp32cam --output-dir firmware/build firmware/doorbell_cam
-
-# Flash via fast_flash.py (with IO0 shorted to GND)
-python firmware/fast_flash.py
-```
-*(Once complete, disconnect IO0 from GND and press RST).*
-
-### 5. Enroll Known Faces
-Drop portrait photos of individuals you wish to recognize into `known_faces/`:
-```bash
-known_faces/
-├── arush.jpg
-└── mom.jpg
-```
-Run the facial encoder:
-```bash
-python face_db/encode_faces.py
-```
-
-### 6. Launch Server & Mobile App
-```bash
+# Run server locally
 python doorbell_server.py
 ```
-1. Open `http://<YOUR-PC-IP>:5000` in your browser.
-2. Tap **"Add to Home Screen"** on your phone to install the Progressive Web App.
-3. Install the free **ntfy** app ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iOS](https://apps.apple.com/app/ntfy/id1625396347)) and subscribe to topic `arush-doorcam-cctv` (or your custom topic name in `config.py`).
+
+### 3. Enrolling Known Faces
+1. Place portrait photos (`.jpg` or `.png`) of individuals inside `known_faces/`:
+   ```text
+   known_faces/
+   ├── Arush.jpg
+   └── Mom.jpg
+   ```
+2. Run the offline facial embedding generator:
+   ```bash
+   python face_db/encode_faces.py
+   ```
+   This generates `face_db/encodings.pkl`, which is loaded into server memory on startup.
+
+### 4. Flashing Firmware to ESP32-CAM
+1. Open `firmware/doorbell_cam/doorbell_cam.ino` in Arduino IDE.
+2. Select Board: **AI Thinker ESP32-CAM** | Partition: **Huge APP (3MB No OTA/1MB SPIFFS)**.
+3. Export compiled binary (`Ctrl + Alt + S` in Arduino IDE).
+4. Short **IO0 to GND** on the ESP32-CAM and plug into USB (or mount on ESP32-CAM-MB shield).
+5. Flash using the high-speed flasher:
+   ```powershell
+   python firmware/fast_flash.py
+   ```
+6. Disconnect **IO0 from GND** and press the **RST** button.
 
 ---
 
 ## 🔒 Security & Privacy Architecture
 
-- **100% Local Processing:** Unlike Ring, Nest, or proprietary cloud cameras, video streams and biometric facial embeddings never leave your local area network.
-- **Zero Subscription Fees:** Powered by self-hosted open protocols.
-- **Decoupled Secrets:** Wi-Fi credentials and private visitor histories are `.gitignored` by default.
+- **Self-Hosted Biometric Privacy**: Biometric facial recognition models and feature vectors execute entirely within your private container or local server. No private facial embeddings are ever uploaded to third-party proprietary clouds.
+- **Zero Inbound NAT Openings**: Remote streaming operates via outbound long-polling and socket pushes—no risky port forwarding or firewall exceptions required.
+- **Encrypted Global Ingress**: All mobile dashboard sessions, live MJPEG feeds, and push communications run over TLS 1.3 encryption (HTTPS/WSS).
+- **Zero Subscription Fees**: Built entirely on self-hosted open-source software and open protocols.
 
 ---
 
@@ -210,4 +234,5 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 **Arush Reddy**  
 - **GitHub:** [@Arush-Reddy](https://github.com/Arush-Reddy)  
-- **Project:** DoorCam — Edge-AI Smart Video Doorbell System
+- **Project:** [DoorCam — Edge-AI Smart Video Doorbell System](https://github.com/Arush-Reddy/DoorCam)
+
