@@ -2,8 +2,20 @@ import subprocess
 import time
 import sys
 
+import os
+
 ESPTOOL = r"C:\Users\Arush\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.3.1\esptool.exe"
-APP_BIN = r"d:\ESP\DoorCam\firmware\build\doorbell_cam.ino.bin"
+
+candidates = [
+    r"d:\ESP\DoorCam\firmware\doorbell_cam\build\esp32.esp32.esp32cam\doorbell_cam.ino.bin",
+    r"d:\ESP\DoorCam\firmware\build\doorbell_cam.ino.bin"
+]
+candidates = [c for c in candidates if os.path.exists(c)]
+if candidates:
+    APP_BIN = max(candidates, key=os.path.getmtime)
+else:
+    APP_BIN = r"d:\ESP\DoorCam\firmware\build\doorbell_cam.ino.bin"
+
 PORT = "COM4"
 BAUD = "115200"
 
@@ -26,7 +38,10 @@ def try_flash():
     return res.returncode == 0
 
 if __name__ == "__main__":
+    import datetime
     print("=== ESP32-CAM Final App Flasher (Instant ACK Flushed) ===")
+    print(f"Flashing Binary: {APP_BIN}")
+    print(f"Binary Timestamp: {datetime.datetime.fromtimestamp(os.path.getmtime(APP_BIN))}")
     for attempt in range(1, 4):
         print(f"\n--- Attempt {attempt}/3 ---")
         if try_flash():

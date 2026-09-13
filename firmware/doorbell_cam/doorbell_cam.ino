@@ -25,6 +25,11 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
+// Forward declarations
+bool triggerDoorbell(const char* triggerType);
+void streamCloudBurst(int durationSeconds);
+bool checkCloudStreamCommand();
+
 // ==========================================
 // 1. NETWORK & SERVER CONFIGURATION
 // ==========================================
@@ -161,7 +166,7 @@ void startCameraServer() {
   }
 }
 
-// 15-20 FPS Live Cloud Stream Burst (Option C: 30-second stream on ring)
+// 15-20 FPS Live Cloud Stream Burst (Option C: 30-second stream on ring, or on-demand)
 void streamCloudBurst(int durationSeconds) {
   Serial.printf("\n[STREAM] Starting %d-second live cloud stream to %s...\n", durationSeconds, serverHost);
 
@@ -187,8 +192,21 @@ void streamCloudBurst(int durationSeconds) {
   unsigned long startTime = millis();
   unsigned long durationMs = (unsigned long)durationSeconds * 1000UL;
   int framesSent = 0;
+  bool stopRequested = false;
 
-  while (millis() - startTime < durationMs) {
+  while ((millis() - startTime < durationMs) && !stopRequested) {
+    // Check if Doorbell Button was pressed while streaming!
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      delay(30);
+      if (digitalRead(BUTTON_PIN) == LOW) {
+        Serial.println("[STREAM] Button pressed during live stream! Logging visitor alert...");
+        while (digitalRead(BUTTON_PIN) == LOW) { delay(10); }
+        clientPtr->stop();
+        triggerDoorbell("BUTTON");
+        return; // triggerDoorbell initiates its own 30s stream burst
+      }
+    }
+
     if (!clientPtr->connected()) {
       if (!clientPtr->connect(serverHost, serverPort)) {
         delay(60);
@@ -213,12 +231,19 @@ void streamCloudBurst(int durationSeconds) {
     esp_camera_fb_return(fb);
     framesSent++;
 
-    // Quick ACK flush (read 200 OK without blocking)
+    // Quick ACK read with STOP detection
     unsigned long ackWait = millis();
     while (clientPtr->connected() && millis() - ackWait < 100) {
       if (clientPtr->available()) {
         String line = clientPtr->readStringUntil('\n');
-        if (line.indexOf("200") >= 0) break;
+        if (line.indexOf("X-Stream: STOP") >= 0 || line.indexOf("STOP") >= 0) {
+          Serial.println("[STREAM] Server signaled STOP (user ended session or timed out).");
+          stopRequested = true;
+          break;
+        }
+        if (line.indexOf("\r") == 0 || line.length() == 0) {
+          break;
+        }
       }
     }
 
@@ -422,10 +447,54 @@ void setup() {
   Serial.println("[SYS] Doorbell system armed and ready.");
 }
 
+// Check if cloud server is requesting an on-demand live stream
+bool checkCloudStreamCommand() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  bool isHttps = (serverPort == 443);
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  WiFiClient *clientPtr = nullptr;
+
+  if (isHttps) {
+    secureClient.setInsecure();
+    secureClient.setTimeout(1800);
+    clientPtr = &secureClient;
+  } else {
+    plainClient.setTimeout(1500);
+    clientPtr = &plainClient;
+  }
+
+  if (!clientPtr->connect(serverHost, serverPort)) {
+    return false;
+  }
+
+  clientPtr->print(String("GET /api/stream_cmd HTTP/1.1\r\n") +
+                   "Host: " + String(serverHost) + "\r\n" +
+                   "Connection: close\r\n\r\n");
+
+  unsigned long start = millis();
+  String resp = "";
+  while (clientPtr->connected() && millis() - start < 1200) {
+    while (clientPtr->available()) {
+      char c = clientPtr->read();
+      resp += c;
+    }
+  }
+  clientPtr->stop();
+
+  if (resp.indexOf("\"stream\":true") >= 0 || resp.indexOf("\"stream\": true") >= 0) {
+    return true;
+  }
+  return false;
+}
+
 void loop() {
   unsigned long now = millis();
 
-  // Check Doorbell Button (Active LOW) with hardware debounce filter
+  // 1. Check Doorbell Button (Active LOW) with hardware debounce filter
   if (digitalRead(BUTTON_PIN) == LOW) {
     delay(40); // Debounce delay
     if (digitalRead(BUTTON_PIN) == LOW) {
@@ -441,7 +510,7 @@ void loop() {
   }
 
 #if ENABLE_PIR
-  // Check PIR Motion Sensor (Active HIGH)
+  // 2. Check PIR Motion Sensor (Active HIGH)
   if (digitalRead(PIR_PIN) == HIGH) {
     if (now - lastCaptureTime > CAPTURE_COOLDOWN_MS) {
       lastCaptureTime = now;
@@ -449,6 +518,16 @@ void loop() {
     }
   }
 #endif
+
+  // 3. Poll cloud server for on-demand live stream command every 1.5 seconds
+  static unsigned long lastCmdCheck = 0;
+  if (now - lastCmdCheck >= 1500) {
+    lastCmdCheck = now;
+    if (checkCloudStreamCommand()) {
+      Serial.println("[CMD] Cloud requested On-Demand Live Stream! Starting 60s stream...");
+      streamCloudBurst(60);
+    }
+  }
 
   delay(20);
 }
