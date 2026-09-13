@@ -1181,6 +1181,8 @@ def app_home():
                         const data = JSON.parse(event.data);
                         if (data.type === 'visitor') {
                             handleIncomingVisitor(data, true);
+                        } else if (data.type === 'visitor_update') {
+                            updateVisitorInfo(data);
                         }
                     } catch (e) {}
                 };
@@ -1285,6 +1287,30 @@ def app_home():
                 // 7. If button triggered, live stream starts automatically on ESP32 - sync immediately
                 if (v.trigger === 'BUTTON') {
                     syncLiveState();
+                }
+            }
+
+            function updateVisitorInfo(data) {
+                if (!data || !data.visit_id) return;
+                const visitId = data.visit_id;
+                const newName = data.name || 'Visitor';
+                const isKnown = newName && !newName.includes('Unknown') && newName !== 'Visitor' && !newName.includes('...');
+
+                // 1. Update timeline item if present
+                const item = document.querySelector(`[data-visit-id="${visitId}"]`);
+                if (item) {
+                    const nameEl = item.querySelector('.item-name');
+                    if (nameEl) {
+                        nameEl.textContent = newName;
+                        nameEl.className = 'item-name ' + (isKnown ? 'known' : 'unknown');
+                    }
+                }
+
+                // 2. Update toast banner if currently displaying this visit
+                const toastTitle = document.getElementById('toast-title');
+                const toast = document.getElementById('alert-toast');
+                if (toast && toast.style.display !== 'none' && toastTitle) {
+                    toastTitle.textContent = newName;
                 }
             }
 
@@ -1588,6 +1614,8 @@ def app_home():
                         // 2. Sync Latest Visitor (Live Event Auto-Refresh)
                         if (data.latest_visit && data.latest_visit.id > latestVisitId) {
                             handleIncomingVisitor(data.latest_visit, true);
+                        } else if (data.latest_visit && data.latest_visit.id === latestVisitId) {
+                            updateVisitorInfo({ visit_id: data.latest_visit.id, name: data.latest_visit.name });
                         }
 
                         // 3. Sync PIR Motion Alert Button State across all devices live
@@ -1742,56 +1770,77 @@ def visitor():
 
         logger.info("Saved snapshot: %s (Trigger: %s)", photo_save_path, trigger_source)
 
-        # Run facial recognition
-        recognized_name = "Visitor"
-        confidence = None
-        try:
-            recognized_name, confidence = recognize_faces_in_image(photo_save_path)
-            logger.info("Identified: %s (dist: %s)", recognized_name, confidence)
-        except Exception as fe:
-            logger.error("Face recognition exception: %s", fe)
+        # Initial label for instant sub-millisecond alerting
+        initial_name = "Doorbell Ringing..." if trigger_source == "BUTTON" else "Motion Detected..."
 
-        # Log to database
+        # Log to database immediately
         visit_id = visitor_log.log_visit(
-            name=recognized_name,
+            name=initial_name,
             photo_path=photo_save_path,
             trigger_source=trigger_source,
-            confidence=confidence
+            confidence=None
         )
 
         relative_photo_path = os.path.relpath(photo_save_path, config.BASE_DIR)
         photo_url = f"/photo/{relative_photo_path.replace(chr(92), '/')}"
 
-        # Broadcast to live Web App & PWA clients instantly
+        # ⚡ Broadcast to live Web App & PWA clients INSTANTLY (chime rings immediately!)
         event_payload = {
             "type": "visitor",
             "visit_id": visit_id,
-            "name": recognized_name,
+            "name": initial_name,
             "trigger": trigger_source,
             "timestamp": now.strftime("%I:%M:%S %p"),
             "photo_url": photo_url
         }
         broadcast_event(event_payload)
 
-        # Check cooldown before sending external push notifications
-        time_since_last = current_time_sec - last_notification_time
-        if time_since_last >= config.NOTIFICATION_COOLDOWN_SECONDS:
-            last_notification_time = current_time_sec
-            timestamp_str = now.strftime("%I:%M:%S %p • %d %b %Y")
-            
-            # Dispatches via ntfy (dedicated CCTV app) & Telegram (if enabled)
+        # Asynchronously run AI facial recognition and dispatch external alerts
+        def _async_process_face_and_alerts():
+            global last_notification_time
+            rec_name = "Unknown Visitor"
+            rec_conf = None
             try:
-                notify.dispatch_all_alerts(photo_save_path, recognized_name, trigger_source, timestamp_str)
-            except Exception as ne:
-                logger.error("Notification dispatch error: %s", ne)
-        else:
-            logger.info("External alert suppressed by anti-spam cooldown (elapsed: %.1fs < %ds)", 
-                        time_since_last, config.NOTIFICATION_COOLDOWN_SECONDS)
+                rec_name, rec_conf = recognize_faces_in_image(photo_save_path)
+                logger.info("Identified visit #%d: %s (dist: %s)", visit_id, rec_name, rec_conf)
+            except Exception as fe:
+                logger.error("Async face recognition exception: %s", fe)
+                rec_name = "Visitor"
+
+            # Update database record with identified face
+            try:
+                visitor_log.update_visit_face(visit_id, rec_name, rec_conf)
+            except Exception as dbe:
+                logger.error("Failed to update visit #%d in DB: %s", visit_id, dbe)
+
+            # Broadcast update to web clients so name updates live without re-triggering sound
+            broadcast_event({
+                "type": "visitor_update",
+                "visit_id": visit_id,
+                "name": rec_name,
+                "confidence": rec_conf
+            })
+
+            # Check cooldown before sending external push notifications
+            ts_sec = time.time()
+            time_since_last = ts_sec - last_notification_time
+            if time_since_last >= config.NOTIFICATION_COOLDOWN_SECONDS:
+                last_notification_time = ts_sec
+                timestamp_str = now.strftime("%I:%M:%S %p • %d %b %Y")
+                try:
+                    notify.dispatch_all_alerts(photo_save_path, rec_name, trigger_source, timestamp_str)
+                except Exception as ne:
+                    logger.error("Notification dispatch error: %s", ne)
+            else:
+                logger.info("External alert suppressed by cooldown (elapsed: %.1fs < %ds)", 
+                            time_since_last, config.NOTIFICATION_COOLDOWN_SECONDS)
+
+        threading.Thread(target=_async_process_face_and_alerts, daemon=True).start()
 
         return jsonify({
             "status": "success",
             "visit_id": visit_id,
-            "name": recognized_name,
+            "name": initial_name,
             "trigger": trigger_source,
             "photo_url": photo_url,
             "timestamp": now.strftime("%Y-%m-%d %H:%M:%S")

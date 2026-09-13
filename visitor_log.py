@@ -38,6 +38,18 @@ def log_visit(name: str, photo_path: str, trigger_source: str = "PIR", confidenc
         conn.commit()
         return cursor.lastrowid
 
+def update_visit_face(visit_id: int, name: str, confidence: float = None):
+    """Updates the recognized name and confidence for an existing visit record."""
+    init_db()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE visits
+            SET name = ?, confidence = ?
+            WHERE id = ?
+        """, (name, confidence, visit_id))
+        conn.commit()
+
 def get_recent_visits(limit: int = 25):
     """Retrieves recent visitor logs."""
     init_db()
