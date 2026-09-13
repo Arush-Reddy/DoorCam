@@ -27,29 +27,29 @@ sequenceDiagram
     participant AI as Face AI Worker (dlib)
     participant Push as Mobile Push (ntfy)
 
-    Note over Owner,Cloud: Workflow A: 24/7 On-Demand Live Streaming
-    Owner->>Cloud: Clicks "Watch Live Stream" (POST /api/stream/start)
+    Note over Owner,Cloud: Workflow A - 24/7 On-Demand Live Streaming
+    Owner->>Cloud: Tap Watch Live Stream
     Cloud->>Cloud: Arm stream demand flag (60s safety timeout)
     ESP->>Cloud: Polls GET /api/stream_cmd (every 1.5s in standby)
-    Cloud-->>ESP: {"stream": true}
-    ESP->>Cloud: Pushes live MJPEG frames (13-15 FPS) to /api/stream_push
-    Cloud-->>Owner: Multiplexes /video_feed to all connected devices
-    Owner->>Cloud: Clicks "Stop Stream" (POST /api/stream/stop)
-    Cloud-->>ESP: Stream stops; ESP returns to standby
+    Cloud-->>ESP: Stream command active (true)
+    ESP->>Cloud: Push live MJPEG frames (13-15 FPS)
+    Cloud-->>Owner: Multiplex live feed to connected devices
+    Owner->>Cloud: Tap Stop Stream
+    Cloud-->>ESP: Demand cleared - ESP returns to standby
 
-    Note over Visitor,Owner: Workflow B: Physical Doorbell Ring (< 2s Alert)
-    Visitor->>ESP: Presses Doorbell Button (GPIO 14 -> GND)
-    ESP->>ESP: Hardware Debounce Filter (40ms) + Capture HD Snapshot
-    ESP->>Cloud: POST /visitor?trigger=BUTTON (multipart snapshot photo)
-    Note over Cloud: Latency: < 10ms (Zero blocking)
-    Cloud-->>Owner: Broadcasts SSE event {"type": "visitor", "name": "Doorbell Ringing..."}
-    Owner-->>Owner: Plays Web Audio Chime (Ding-Dong 660Hz->523Hz) + Vibration
-    Cloud-->>ESP: HTTP 200 OK -> ESP begins 30s live stream
-    Cloud->>AI: Offloads snapshot to background daemon thread
-    AI->>AI: Computes HOG + 128D ResNet Embeddings (matches "Arush" vs Unknown)
-    AI-->>Cloud: Updates SQLite DB with identity & confidence
-    Cloud-->>Owner: Broadcasts SSE {"type": "visitor_update", "name": "Arush"}
-    Cloud-->>Push: Dispatches push notification with photo to lock screen
+    Note over Visitor,Owner: Workflow B - Physical Doorbell Ring
+    Visitor->>ESP: Press Doorbell Button (GPIO 14 to GND)
+    ESP->>ESP: Hardware Debounce Filter (40ms) + Capture Photo
+    ESP->>Cloud: POST /visitor with photo snapshot
+    Note over Cloud: Immediate ACK under 10ms (Zero blocking)
+    Cloud-->>Owner: Broadcast SSE event - Doorbell Ringing
+    Owner-->>Owner: Play Web Audio Chime + Device Vibration
+    Cloud-->>ESP: HTTP 200 OK - ESP begins 30s live stream
+    Cloud->>AI: Dispatch snapshot to background worker
+    AI->>AI: Compute HOG and 128D ResNet Embeddings
+    AI-->>Cloud: Update database with recognized identity
+    Cloud-->>Owner: Broadcast SSE event - Name Resolved (Arush)
+    Cloud-->>Push: Dispatch mobile push notification with photo
 ```
 
 ---
