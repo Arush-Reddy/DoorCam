@@ -1098,6 +1098,22 @@ def app_home():
             let soundEnabled = true;
             let audioCtx = null;
 
+            // Unlock AudioContext on first user tap/click to comply with browser autoplay policy
+            const unlockAudio = () => {
+                try {
+                    if (!audioCtx) {
+                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (audioCtx && audioCtx.state === 'suspended') {
+                        audioCtx.resume();
+                    }
+                } catch (e) {}
+                document.removeEventListener('click', unlockAudio);
+                document.removeEventListener('touchstart', unlockAudio);
+            };
+            document.addEventListener('click', unlockAudio);
+            document.addEventListener('touchstart', unlockAudio);
+
             function playChime() {
                 if (!soundEnabled) return;
                 try {
