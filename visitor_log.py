@@ -3,6 +3,8 @@ import datetime
 import os
 import config
 
+LOCAL_TIMEZONE = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
 def get_connection():
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -23,10 +25,17 @@ def init_db():
         """)
         conn.commit()
 
-def log_visit(name: str, photo_path: str, trigger_source: str = "PIR", confidence: float = None) -> int:
-    """Logs a visitor entry to the SQLite database."""
+def clear_all_visits():
+    """Clears all visitor log records from the database."""
     init_db()
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection() as conn:
+        conn.execute("DELETE FROM visits")
+        conn.commit()
+
+def log_visit(name: str, photo_path: str, trigger_source: str = "PIR", confidence: float = None) -> int:
+    """Logs a visitor entry to the SQLite database with local IST timestamp."""
+    init_db()
+    timestamp = datetime.datetime.now(LOCAL_TIMEZONE).strftime("%Y-%m-%d %I:%M:%S %p")
     relative_path = os.path.relpath(photo_path, config.BASE_DIR) if os.path.isabs(photo_path) else photo_path
 
     with get_connection() as conn:

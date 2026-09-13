@@ -499,6 +499,14 @@ def toggle_pir_alerts():
     logger.info("PIR motion alerts toggled to: %s", pir_alerts_enabled)
     return jsonify({"enabled": pir_alerts_enabled})
 
+@app.route("/api/feed/clear", methods=["POST"])
+def clear_feed():
+    """Clears all visitor history from database and notifies all connected clients."""
+    visitor_log.clear_all_visits()
+    broadcast_event({"type": "feed_cleared"})
+    logger.info("Activity feed cleared by user")
+    return jsonify({"status": "cleared", "count": 0})
+
 @app.route("/api/latest_frame")
 def get_latest_frame():
     """Returns the most recent single JPEG frame from camera memory buffer."""
@@ -800,6 +808,24 @@ def app_home():
             }
             .section-title { font-size: 15px; font-weight: 700; margin: 0; }
             .feed-count { font-size: 12px; color: var(--text-muted); }
+            .clear-feed-btn {
+                background: rgba(239, 68, 68, 0.12);
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                color: #fca5a5;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 4px 10px;
+                border-radius: 8px;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                transition: all 0.15s ease;
+            }
+            .clear-feed-btn:active {
+                transform: scale(0.93);
+                background: rgba(239, 68, 68, 0.28);
+            }
 
             .timeline-list {
                 display: flex;
@@ -989,7 +1015,10 @@ def app_home():
             <!-- Activity / Event Timeline -->
             <div class="section-header">
                 <h2 class="section-title">Activity Feed</h2>
-                <div class="feed-count">{{ visits|length }} events</div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="feed-count">{{ visits|length }} events</div>
+                    <button class="clear-feed-btn" onclick="clearActivityFeed()" title="Clear Activity Feed">🗑️ Clear</button>
+                </div>
             </div>
 
             <div class="timeline-list" id="timeline-container">
@@ -1002,7 +1031,7 @@ def app_home():
                         </div>
                         <div class="item-meta">
                             <span class="item-badge">{{ v['trigger_source'] }}</span>
-                            <span>{{ v['timestamp'] }}</span>
+                            <span class="item-time">{{ v['timestamp'] }}</span>
                         </div>
                     </div>
                     <div style="color: var(--text-muted); font-size: 18px;">›</div>
@@ -1093,6 +1122,34 @@ def app_home():
             }
             setInterval(updateClock, 1000);
             updateClock();
+
+            // Local Timezone Formatter
+            function formatDisplayTime(rawTs) {
+                if (!rawTs) return '';
+                const str = String(rawTs).trim();
+                // If it's "YYYY-MM-DD HH:MM:SS" (legacy UTC from server)
+                if (/^\\d{4}-\\d{2}-\\d{2}\\s\\d{2}:\\d{2}:\\d{2}$/.test(str)) {
+                    try {
+                        const d = new Date(str.replace(' ', 'T') + 'Z');
+                        if (!isNaN(d.getTime())) {
+                            return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' +
+                                   d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+                        }
+                    } catch (e) {}
+                }
+                // If it's "YYYY-MM-DD HH:MM:SS AM/PM" (local IST from visitor_log)
+                if (/^\\d{4}-\\d{2}-\\d{2}\\s/.test(str)) {
+                    const parts = str.split(' ');
+                    if (parts.length >= 3) {
+                        const dateParts = parts[0].split('-');
+                        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                        const mIdx = parseInt(dateParts[1], 10) - 1;
+                        const monthStr = monthNames[mIdx] || dateParts[1];
+                        return `${monthStr} ${parseInt(dateParts[2], 10)}, ${parts[1]} ${parts[2]}`;
+                    }
+                }
+                return str;
+            }
 
             // Web Audio API Synthesizer for Doorbell Chime
             let soundEnabled = true;
@@ -1199,6 +1256,8 @@ def app_home():
                             handleIncomingVisitor(data, true);
                         } else if (data.type === 'visitor_update') {
                             updateVisitorInfo(data);
+                        } else if (data.type === 'feed_cleared') {
+                            handleFeedCleared();
                         }
                     } catch (e) {}
                 };
@@ -1248,10 +1307,11 @@ def app_home():
                     const toastImg = document.getElementById('toast-img');
                     const toastTitle = document.getElementById('toast-title');
                     const toastTime = document.getElementById('toast-time');
+                    const displayTs = formatDisplayTime(v.timestamp);
                     if (toast && toastImg && toastTitle && toastTime) {
                         toastImg.src = v.photo_url;
                         toastTitle.textContent = v.name;
-                        toastTime.textContent = (v.trigger || 'Alert') + ' • ' + (v.timestamp || 'Just now');
+                        toastTime.textContent = (v.trigger || 'Alert') + ' • ' + (displayTs || 'Just now');
                         toast.style.display = 'block';
                         clearTimeout(toastTimeout);
                         toastTimeout = setTimeout(() => {
@@ -1274,18 +1334,19 @@ def app_home():
                 if (noMsg) noMsg.remove();
 
                 if (container) {
+                    const displayTs = formatDisplayTime(v.timestamp);
                     const isKnown = v.name && !v.name.includes('Unknown') && v.name !== 'Visitor';
                     const item = document.createElement('div');
                     item.className = 'timeline-item';
                     if (visitId) item.setAttribute('data-visit-id', visitId);
-                    item.onclick = () => openPhotoModal(v.photo_url, v.name, v.timestamp, v.trigger || 'VISITOR');
+                    item.onclick = () => openPhotoModal(v.photo_url, v.name, displayTs, v.trigger || 'VISITOR');
                     item.innerHTML = `
                         <img class="item-thumb" src="${v.photo_url}" alt="Thumbnail">
                         <div class="item-info">
                             <div class="item-name ${isKnown ? 'known' : 'unknown'}">${v.name}</div>
                             <div class="item-meta">
                                 <span class="item-badge">${v.trigger || 'VISITOR'}</span>
-                                <span>${v.timestamp}</span>
+                                <span class="item-time">${displayTs}</span>
                             </div>
                         </div>
                         <div style="color: var(--text-muted); font-size: 18px;">›</div>
@@ -1336,6 +1397,38 @@ def app_home():
                 clearTimeout(toastTimeout);
             }
 
+            function clearActivityFeed() {
+                if (!confirm("Are you sure you want to clear the entire activity feed?")) {
+                    return;
+                }
+                fetch('/api/feed/clear', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(() => {
+                        handleFeedCleared();
+                    })
+                    .catch(err => {
+                        alert("Could not clear feed: " + err);
+                    });
+            }
+
+            function handleFeedCleared() {
+                latestVisitId = 0;
+                const container = document.getElementById('timeline-container');
+                if (container) {
+                    container.innerHTML = `
+                        <div id="no-events-msg" style="text-align: center; padding: 36px 12px; color: var(--text-muted);">
+                            <div style="font-size: 32px; margin-bottom: 8px;">🛡️</div>
+                            <div style="font-size: 14px; font-weight: 500;">No activity recorded yet</div>
+                            <div style="font-size: 12px; margin-top: 4px;">PIR motion and doorbell button presses will appear here instantly</div>
+                        </div>
+                    `;
+                }
+                const feedCount = document.querySelector('.feed-count');
+                if (feedCount) {
+                    feedCount.textContent = '0 events';
+                }
+            }
+
             function enablePushNotifications() {
                 if (!('Notification' in window)) {
                     alert("This browser doesn't support notifications.");
@@ -1353,7 +1446,7 @@ def app_home():
             function openPhotoModal(photoUrl, name, time, trigger) {
                 document.getElementById('modal-img').src = photoUrl;
                 document.getElementById('modal-name').textContent = name;
-                document.getElementById('modal-meta').textContent = trigger + " • " + time;
+                document.getElementById('modal-meta').textContent = trigger + " • " + formatDisplayTime(time);
                 document.getElementById('photo-modal').style.display = 'flex';
             }
             function closePhotoModal(e) {
@@ -1632,6 +1725,8 @@ def app_home():
                             handleIncomingVisitor(data.latest_visit, true);
                         } else if (data.latest_visit && data.latest_visit.id === latestVisitId) {
                             updateVisitorInfo({ visit_id: data.latest_visit.id, name: data.latest_visit.name });
+                        } else if (!data.latest_visit && latestVisitId > 0) {
+                            handleFeedCleared();
                         }
 
                         // 3. Sync PIR Motion Alert Button State across all devices live
@@ -1650,6 +1745,13 @@ def app_home():
             // High-frequency live state sync (every 1.5s)
             setInterval(syncLiveState, 1500);
             syncLiveState();
+
+            // Format all server-rendered timestamps to user local timezone
+            try {
+                document.querySelectorAll('.item-time').forEach(el => {
+                    el.textContent = formatDisplayTime(el.textContent);
+                });
+            } catch (e) {}
 
             // Tab visibility change: immediately sync when user returns to tab
             document.addEventListener('visibilitychange', () => {
@@ -1739,7 +1841,7 @@ def visitor():
 
     try:
         trigger_source = request.args.get("trigger", request.form.get("trigger", "PIR")).upper()
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(visitor_log.LOCAL_TIMEZONE)
         current_time_sec = time.time()
 
         if trigger_source == "PIR" and not pir_alerts_enabled:
