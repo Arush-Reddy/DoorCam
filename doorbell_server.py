@@ -327,14 +327,39 @@ class CameraStreamRelay:
                 time.sleep(1)
 
 camera_relay = CameraStreamRelay()
+# ==========================================
+# ON-DEMAND LIVE CLOUD STREAMING CONTROLLER
+# ==========================================
+stream_demand_active = False
+stream_demand_expiry = 0.0
+stream_demand_lock = threading.Lock()
+ring_stream_expiry = 0.0
+
+def is_streaming_requested():
+    """Returns True if user is actively watching live or doorbell was just rung."""
+    global stream_demand_active, stream_demand_expiry, ring_stream_expiry
+    now = time.time()
+    with stream_demand_lock:
+        if stream_demand_active and now > stream_demand_expiry:
+            stream_demand_active = False
+        demand = bool(stream_demand_active and now < stream_demand_expiry)
+        ring = bool(now < ring_stream_expiry)
+        return demand or ring
 
 @app.route("/api/frame_push", methods=["POST"])
 def receive_pushed_frame():
-    """Allows ESP32 to push individual live stream frames."""
+    """Allows ESP32 to push individual live stream frames and receive stream/stop feedback."""
     data = request.get_data()
     if data:
         camera_relay.push_frame(data)
-        return "OK", 200
+        if is_streaming_requested():
+            resp = Response("OK", status=200, mimetype="text/plain")
+            resp.headers["X-Stream"] = "CONTINUE"
+            return resp
+        else:
+            resp = Response("STOP", status=200, mimetype="text/plain")
+            resp.headers["X-Stream"] = "STOP"
+            return resp
     return "No frame", 400
 
 @app.route("/api/stream_push", methods=["POST"])
@@ -363,14 +388,51 @@ def receive_pushed_stream():
         logger.debug("Stream push ended: %s", e)
         return "Closed", 200
 
+@app.route("/api/stream/start", methods=["POST"])
+def start_stream_demand():
+    """Starts on-demand live cloud streaming session."""
+    global stream_demand_active, stream_demand_expiry
+    duration = 60
+    try:
+        req_json = request.get_json(silent=True)
+        if req_json and "duration" in req_json:
+            duration = min(int(req_json["duration"]), 180)
+    except Exception:
+        pass
+    with stream_demand_lock:
+        stream_demand_active = True
+        stream_demand_expiry = time.time() + duration
+    logger.info("On-demand live stream started (duration: %ds)", duration)
+    return jsonify({"status": "started", "active": True, "expires_in": duration})
+
+@app.route("/api/stream/stop", methods=["POST"])
+def stop_stream_demand():
+    """Stops on-demand live cloud streaming session immediately."""
+    global stream_demand_active, stream_demand_expiry, ring_stream_expiry
+    with stream_demand_lock:
+        stream_demand_active = False
+        stream_demand_expiry = 0.0
+        ring_stream_expiry = 0.0
+    logger.info("On-demand live stream stopped by user")
+    return jsonify({"status": "stopped", "active": False})
+
+@app.route("/api/stream_cmd", methods=["GET"])
+def stream_command():
+    """Polled by ESP32-CAM every 1.5-2 seconds to know whether to stream live video."""
+    return jsonify({"stream": is_streaming_requested()})
+
 @app.route("/api/stream_status")
 def stream_status():
     """Returns whether the ESP32 is actively streaming live video right now."""
     active = camera_relay.is_active()
+    now = time.time()
+    remaining = max(0, int(stream_demand_expiry - now)) if stream_demand_active else 0
     return jsonify({
         "active": active,
         "fps": getattr(camera_relay, "fps", 0),
-        "age_sec": round(time.time() - camera_relay.last_frame_time, 1) if camera_relay.last_frame_time else 999
+        "age_sec": round(now - camera_relay.last_frame_time, 1) if camera_relay.last_frame_time else 999,
+        "demand": is_streaming_requested(),
+        "remaining_sec": remaining
     })
 
 
@@ -602,6 +664,19 @@ def app_home():
             .action-btn .label { font-size: 11px; font-weight: 500; color: var(--text-muted); }
             .action-btn.active { border-color: var(--accent); background: rgba(14, 165, 233, 0.15); }
             .action-btn.active .label { color: var(--accent-light); }
+            .action-btn.streaming-active {
+                border-color: #ef4444 !important;
+                background: rgba(239, 68, 68, 0.22) !important;
+                animation: livePulse 1.5s infinite;
+            }
+            .action-btn.streaming-active .label {
+                color: #fca5a5 !important;
+                font-weight: 700 !important;
+            }
+            @keyframes livePulse {
+                0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+                50% { box-shadow: 0 0 15px 3px rgba(239, 68, 68, 0.6); }
+            }
 
             /* Incoming Alert Banner (Animated) */
             #alert-toast {
@@ -794,23 +869,35 @@ def app_home():
                 </div>
             </div>
 
+            <!-- Live Stream On-Demand Controls -->
+            <div style="margin-bottom: 12px; display: flex; gap: 10px;">
+                <button id="btn-watch-live" class="action-btn" onclick="toggleWatchLive()" style="flex: 2; flex-direction: row; justify-content: center; padding: 13px 16px; border: 1px solid var(--accent); background: rgba(14, 165, 233, 0.15); border-radius: 14px;">
+                    <span class="icon" id="watch-live-icon" style="font-size: 20px;">📹</span>
+                    <span class="label" id="watch-live-label" style="font-size: 13px; font-weight: 700; color: var(--accent-light);">Watch Live Stream</span>
+                </button>
+                <button class="action-btn" id="btn-sound" onclick="toggleChimeSound()" style="flex: 1; flex-direction: row; justify-content: center; padding: 13px 10px; border-radius: 14px;">
+                    <span class="icon">🔊</span>
+                    <span class="label">Sound</span>
+                </button>
+            </div>
+
             <!-- Quick Action Controls -->
             <div class="quick-actions">
-                <button class="action-btn" id="btn-sound" onclick="toggleChimeSound()">
-                    <span class="icon">🔊</span>
-                    <span class="label">Chime: ON</span>
-                </button>
                 <button class="action-btn" onclick="testDoorbellChime()">
                     <span class="icon">🔔</span>
                     <span class="label">Test Ring</span>
                 </button>
                 <button class="action-btn" onclick="openConfigModal()">
-                    <span class="icon">📹</span>
-                    <span class="label">Set IP</span>
+                    <span class="icon">⚙️</span>
+                    <span class="label">Settings</span>
                 </button>
                 <button class="action-btn" onclick="window.open('https://ntfy.sh/{{ ntfy_topic }}', '_blank')">
                     <span class="icon">📲</span>
                     <span class="label">Phone App</span>
+                </button>
+                <button class="action-btn" onclick="location.reload()">
+                    <span class="icon">🔄</span>
+                    <span class="label">Refresh</span>
                 </button>
             </div>
 
@@ -1148,9 +1235,57 @@ def app_home():
                 }
             }
 
-            // Auto Stream Switcher: Automatically switches to 15-20 FPS live video on doorbell ring
+            // Live Cloud Stream Controller: Watch Live on demand and auto-switch on doorbell ring
             let isStreamingLive = false;
             let currentSnapshotUrl = '{{ ("/photo/" + latest_visit["photo_path"]) if latest_visit else "" }}';
+            let watchLiveRequested = false;
+
+            function toggleWatchLive() {
+                const btn = document.getElementById('btn-watch-live');
+                const btnIcon = document.getElementById('watch-live-icon');
+                const btnLabel = document.getElementById('watch-live-label');
+
+                if (watchLiveRequested || (btn && btn.classList.contains('streaming-active'))) {
+                    // Stop Stream
+                    watchLiveRequested = false;
+                    if (btn) btn.classList.remove('streaming-active');
+                    if (btnIcon) btnIcon.textContent = '📹';
+                    if (btnLabel) {
+                        btnLabel.textContent = 'Watch Live Stream';
+                        btnLabel.style.color = 'var(--accent-light)';
+                    }
+                    fetch('/api/stream/stop', { method: 'POST' })
+                        .finally(() => checkStreamStatus());
+                } else {
+                    // Start Stream
+                    watchLiveRequested = true;
+                    if (btn) btn.classList.add('streaming-active');
+                    if (btnIcon) btnIcon.textContent = '⏳';
+                    if (btnLabel) {
+                        btnLabel.textContent = 'Connecting Camera...';
+                        btnLabel.style.color = '#fca5a5';
+                    }
+                    fetch('/api/stream/start', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ duration: 60 })
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        checkStreamStatus();
+                    })
+                    .catch(err => {
+                        watchLiveRequested = false;
+                        if (btn) btn.classList.remove('streaming-active');
+                        if (btnIcon) btnIcon.textContent = '📹';
+                        if (btnLabel) {
+                            btnLabel.textContent = 'Watch Live Stream';
+                            btnLabel.style.color = 'var(--accent-light)';
+                        }
+                        alert('Could not connect to live stream: ' + err);
+                    });
+                }
+            }
 
             function checkStreamStatus() {
                 fetch('/api/stream_status')
@@ -1159,6 +1294,9 @@ def app_home():
                         const img = document.getElementById('cam-feed');
                         const label = document.getElementById('live-label');
                         const meta = document.getElementById('cam-meta-text');
+                        const btn = document.getElementById('btn-watch-live');
+                        const btnIcon = document.getElementById('watch-live-icon');
+                        const btnLabel = document.getElementById('watch-live-label');
                         if (!img || !label) return;
 
                         if (data.active) {
@@ -1169,6 +1307,15 @@ def app_home():
                             label.textContent = '● LIVE (' + (data.fps > 0 ? data.fps + ' FPS' : '30s') + ')';
                             label.parentElement.style.background = 'rgba(239, 68, 68, 0.95)';
                             if (meta) meta.textContent = 'Live Cloud Stream • ' + data.fps + ' FPS';
+                            if (btn && (data.demand || watchLiveRequested)) {
+                                btn.classList.add('streaming-active');
+                                if (btnIcon) btnIcon.textContent = '⏹️';
+                                if (btnLabel) {
+                                    const secText = data.remaining_sec ? ('Stop (' + data.remaining_sec + 's)') : 'Stop Live Stream';
+                                    btnLabel.textContent = secText;
+                                    btnLabel.style.color = '#fca5a5';
+                                }
+                            }
                         } else {
                             if (isStreamingLive) {
                                 isStreamingLive = false;
@@ -1177,6 +1324,15 @@ def app_home():
                             label.textContent = 'STANDBY';
                             label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
                             if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
+                            if (btn && !data.demand) {
+                                watchLiveRequested = false;
+                                btn.classList.remove('streaming-active');
+                                if (btnIcon) btnIcon.textContent = '📹';
+                                if (btnLabel) {
+                                    btnLabel.textContent = 'Watch Live Stream';
+                                    btnLabel.style.color = 'var(--accent-light)';
+                                }
+                            }
                         }
                     })
                     .catch(() => {});
@@ -1236,6 +1392,10 @@ def visitor():
         trigger_source = request.args.get("trigger", request.form.get("trigger", "PIR")).upper()
         now = datetime.datetime.now()
         current_time_sec = time.time()
+
+        if trigger_source == "BUTTON":
+            global ring_stream_expiry
+            ring_stream_expiry = current_time_sec + 35.0
 
         # Determine save directory: visitors/YYYY-MM-DD/
         day_folder = os.path.join(config.VISITORS_DIR, now.strftime("%Y-%m-%d"))
