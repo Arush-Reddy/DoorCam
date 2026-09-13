@@ -243,17 +243,19 @@ void streamCloudBurst(int durationSeconds) {
     esp_camera_fb_return(fb);
     framesSent++;
 
-    // Quick ACK read with STOP detection
-    unsigned long ackWait = millis();
-    while (clientPtr->connected() && millis() - ackWait < 100) {
-      if (clientPtr->available()) {
-        String line = clientPtr->readStringUntil('\n');
-        if (line.indexOf("X-Stream: STOP") >= 0 || line.indexOf("STOP") >= 0) {
-          Serial.println("[STREAM] Server signaled STOP (user ended session or timed out).");
-          stopRequested = true;
-          break;
+    // Fast non-blocking read of server response with STOP detection
+    while (clientPtr->available() > 0) {
+      char c = (char)clientPtr->read();
+      if (c == 'S') {
+        char sBuf[5] = {0};
+        sBuf[0] = 'S';
+        int r = 1;
+        while (clientPtr->available() > 0 && r < 4) {
+          sBuf[r++] = (char)clientPtr->read();
         }
-        if (line.indexOf("\r") == 0 || line.length() == 0) {
+        if (strncmp(sBuf, "STOP", 4) == 0) {
+          Serial.println("[STREAM] Server signaled STOP (user ended session).");
+          stopRequested = true;
           break;
         }
       }
@@ -264,7 +266,7 @@ void streamCloudBurst(int durationSeconds) {
       digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
     }
 
-    delay(30); // ~15 FPS smooth rate
+    delay(15); // Smooth 15-20 FPS rate without freezing
   }
 
   clientPtr->stop();

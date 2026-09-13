@@ -291,9 +291,16 @@ class CameraStreamRelay:
             self.latest_frame = frame_bytes
             self.last_frame_time = now
 
+    def reset(self):
+        with self.lock:
+            self.last_frame_time = 0.0
+            self.fps = 0.0
+
     def is_active(self):
         with self.lock:
-            return (self.latest_frame is not None) and ((time.time() - self.last_frame_time) < 4.0)
+            if not is_streaming_requested():
+                return False
+            return (self.latest_frame is not None) and ((time.time() - self.last_frame_time) < 3.5)
 
     def _worker(self):
         while self.running:
@@ -355,15 +362,14 @@ def receive_pushed_frame():
     """Allows ESP32 to push individual live stream frames and receive stream/stop feedback."""
     data = request.get_data()
     if data:
-        camera_relay.push_frame(data)
-        if is_streaming_requested():
-            resp = Response("OK", status=200, mimetype="text/plain")
-            resp.headers["X-Stream"] = "CONTINUE"
-            return resp
-        else:
+        if not is_streaming_requested():
             resp = Response("STOP", status=200, mimetype="text/plain")
             resp.headers["X-Stream"] = "STOP"
             return resp
+        camera_relay.push_frame(data)
+        resp = Response("OK", status=200, mimetype="text/plain")
+        resp.headers["X-Stream"] = "CONTINUE"
+        return resp
     return "No frame", 400
 
 @app.route("/api/stream_push", methods=["POST"])
@@ -417,6 +423,7 @@ def stop_stream_demand():
         stream_demand_active = False
         stream_demand_expiry = 0.0
         ring_stream_expiry = 0.0
+    camera_relay.reset()
     logger.info("On-demand live stream stopped by user")
     return jsonify({"status": "stopped", "active": False})
 
@@ -443,10 +450,14 @@ def stream_status():
 def live_state():
     """Aggregated real-time state: live stream, latest visitor, PIR status."""
     now = time.time()
-    active = camera_relay.is_active()
-    remaining = max(0, int(stream_demand_expiry - now)) if stream_demand_active else 0
+    req_active = is_streaming_requested()
+    active = bool(req_active and camera_relay.is_active())
+    remaining = max(0, int(stream_demand_expiry - now)) if (stream_demand_active and req_active) else 0
     if not remaining and ring_stream_expiry > now:
         remaining = max(0, int(ring_stream_expiry - now))
+    if not req_active:
+        active = False
+        remaining = 0
 
     recent = visitor_log.get_recent_visits(limit=1)
     latest = None
@@ -464,8 +475,8 @@ def live_state():
     return jsonify({
         "stream": {
             "active": active,
-            "fps": getattr(camera_relay, "fps", 0),
-            "demand": is_streaming_requested(),
+            "fps": getattr(camera_relay, "fps", 0) if active else 0.0,
+            "demand": req_active,
             "remaining_sec": remaining
         },
         "latest_visit": latest,
@@ -500,7 +511,9 @@ def video_feed():
     def generate():
         last_sent_time = 0
         start_wait = time.time()
-        while time.time() - start_wait < 90:
+        while time.time() - start_wait < 75:
+            if not is_streaming_requested():
+                break
             with camera_relay.lock:
                 frame = camera_relay.latest_frame
                 frame_time = camera_relay.last_frame_time
@@ -516,8 +529,9 @@ def video_feed():
         generate(),
         mimetype="multipart/x-mixed-replace; boundary=123456789000000000000987654321"
     )
-    resp.headers["Cache-Control"] = "no-cache, private, no-store, must-revalidate"
+    resp.headers["Cache-Control"] = "no-cache, private, no-store, must-revalidate, no-transform"
     resp.headers["Pragma"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
 @app.route("/")
@@ -1387,6 +1401,7 @@ def app_home():
             }
 
             let lastToggleTime = 0;
+            let userStoppedUntil = 0;
 
             function toggleWatchLive() {
                 const now = Date.now();
@@ -1404,8 +1419,9 @@ def app_home():
                 }
                 lastToggleTime = now;
 
-                if (isStreamingLive || (btn && btn.classList.contains('streaming-active') && isStreamingLive)) {
-                    // User clicked STOP
+                if (isStreamingLive || (btn && btn.classList.contains('streaming-active'))) {
+                    // User clicked STOP - activate 4.5s guard to ignore any in-flight frames
+                    userStoppedUntil = Date.now() + 4500;
                     watchLiveRequested = false;
                     isStreamingLive = false;
                     stopFrameFallback();
@@ -1420,10 +1436,14 @@ def app_home():
                         label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
                     }
                     if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
-                    if (img && currentSnapshotUrl) img.src = currentSnapshotUrl;
+                    if (img) {
+                        img.src = currentSnapshotUrl || '';
+                        if (!currentSnapshotUrl) img.style.display = 'none';
+                    }
                     fetch('/api/stream/stop', { method: 'POST' }).finally(() => syncLiveState());
                 } else {
-                    // User clicked START
+                    // User clicked START - clear stop guard
+                    userStoppedUntil = 0;
                     watchLiveRequested = true;
                     if (btn) btn.classList.add('streaming-active');
                     if (btnIcon) btnIcon.textContent = '⏳';
@@ -1452,6 +1472,9 @@ def app_home():
             }
 
             function syncLiveState() {
+                if (Date.now() < userStoppedUntil) {
+                    return; // Ignore any delayed in-flight frames after explicit STOP
+                }
                 fetch('/api/live_state')
                     .then(r => r.json())
                     .then(data => {
