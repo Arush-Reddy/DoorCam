@@ -435,6 +435,17 @@ def stream_status():
         "remaining_sec": remaining
     })
 
+# PIR Motion Alerts State (default False to prevent false motion triggers)
+pir_alerts_enabled = False
+
+@app.route("/api/pir/toggle", methods=["POST"])
+def toggle_pir_alerts():
+    """Toggle PIR motion sensor alerts on/off."""
+    global pir_alerts_enabled
+    pir_alerts_enabled = not pir_alerts_enabled
+    logger.info("PIR motion alerts toggled to: %s", pir_alerts_enabled)
+    return jsonify({"enabled": pir_alerts_enabled})
+
 @app.route("/api/latest_frame")
 def get_latest_frame():
     """Returns the most recent single JPEG frame from camera memory buffer."""
@@ -909,9 +920,9 @@ def app_home():
                     <span class="icon">📲</span>
                     <span class="label">Phone App</span>
                 </button>
-                <button class="action-btn" onclick="location.reload()">
-                    <span class="icon">🔄</span>
-                    <span class="label">Refresh</span>
+                <button class="action-btn" id="btn-pir" onclick="togglePirAlerts()">
+                    <span class="icon" id="pir-icon">{{ '🚶' if pir_enabled else '🛑' }}</span>
+                    <span class="label" id="pir-label">{{ 'Motion: ON' if pir_enabled else 'Motion: OFF' }}</span>
                 </button>
             </div>
 
@@ -1433,6 +1444,17 @@ def app_home():
             setInterval(checkStreamStatus, 1500);
             checkStreamStatus();
 
+            function togglePirAlerts() {
+                fetch('/api/pir/toggle', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(data => {
+                        const icon = document.getElementById('pir-icon');
+                        const label = document.getElementById('pir-label');
+                        if (icon) icon.textContent = data.enabled ? '🚶' : '🛑';
+                        if (label) label.textContent = data.enabled ? 'Motion: ON' : 'Motion: OFF';
+                    });
+            }
+
             function saveConfig() {
                 const ip = document.getElementById('input-cam-ip').value;
                 const topic = document.getElementById('input-ntfy-topic').value;
@@ -1456,7 +1478,8 @@ def app_home():
         ntfy_topic=config.NTFY_TOPIC,
         tunnel_url=tunnel.get_public_url(),
         latest_visit=latest_visit,
-        is_active_stream=camera_relay.is_active()
+        is_active_stream=camera_relay.is_active(),
+        pir_enabled=pir_alerts_enabled
     ))
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -1489,6 +1512,10 @@ def visitor():
         trigger_source = request.args.get("trigger", request.form.get("trigger", "PIR")).upper()
         now = datetime.datetime.now()
         current_time_sec = time.time()
+
+        if trigger_source == "PIR" and not pir_alerts_enabled:
+            logger.info("PIR motion trigger ignored (PIR disabled by user)")
+            return jsonify({"status": "ignored", "reason": "PIR disabled"}), 200
 
         if trigger_source == "BUTTON":
             global ring_stream_expiry

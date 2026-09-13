@@ -42,7 +42,7 @@ bool checkCloudStreamCommand();
   const int serverPort = 5000;
 #endif
 
-#define ENABLE_PIR true   // Enabled for HC-SR501 PIR motion sensor on GPIO 13
+#define ENABLE_PIR false  // Disabled temporarily to prevent false motion triggers
 const char* serverPath = "/visitor";
 
 // ==========================================
@@ -71,6 +71,18 @@ const char* serverPath = "/visitor";
 #define BUTTON_PIN        14     // Doorbell Push Button (Active LOW with internal PULLUP)
 #define FLASH_LED_PIN      4     // Onboard Flash LED (Active HIGH)
 #define STATUS_LED_PIN    33     // Onboard Red LED (Active LOW)
+
+// Hardware Button Interrupt State
+volatile bool g_buttonTriggered = false;
+unsigned long g_lastButtonInterruptTime = 0;
+
+void IRAM_ATTR button_isr() {
+  unsigned long now = millis();
+  if (now - g_lastButtonInterruptTime > 300) {
+    g_buttonTriggered = true;
+    g_lastButtonInterruptTime = now;
+  }
+}
 
 // Cooldown between captures to avoid spamming the server
 const unsigned long CAPTURE_COOLDOWN_MS = 6000;
