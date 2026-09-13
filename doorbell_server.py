@@ -272,16 +272,18 @@ class CameraStreamRelay:
     """Maintains a single persistent connection to ESP32-CAM and broadcasts frames to any number of clients."""
     def __init__(self):
         self.latest_frame = None
-        self.last_frame_time = 0
+        self.last_frame_time = 0.0
+        self.frame_id = 0
         self.fps = 0.0
         self.lock = threading.Lock()
+        self.condition = threading.Condition(self.lock)
         self.running = True
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
 
     def push_frame(self, frame_bytes):
-        """Allows remote ESP32 to push frames directly to cloud server."""
-        with self.lock:
+        """Allows remote ESP32 to push frames directly to cloud server with instant condition broadcast."""
+        with self.condition:
             now = time.time()
             if self.last_frame_time > 0:
                 dt = now - self.last_frame_time
@@ -290,14 +292,17 @@ class CameraStreamRelay:
                     self.fps = round(self.fps * 0.7 + inst_fps * 0.3, 1)
             self.latest_frame = frame_bytes
             self.last_frame_time = now
+            self.frame_id += 1
+            self.condition.notify_all()
 
     def reset(self):
-        with self.lock:
+        with self.condition:
             self.last_frame_time = 0.0
             self.fps = 0.0
+            self.condition.notify_all()
 
     def is_active(self):
-        with self.lock:
+        with self.condition:
             if not is_streaming_requested():
                 return False
             return (self.latest_frame is not None) and ((time.time() - self.last_frame_time) < 3.5)
@@ -507,23 +512,24 @@ def get_latest_frame():
 
 @app.route("/video_feed")
 def video_feed():
-    """Streams live MJPEG frames buffered in server memory to all connected browsers/phones."""
+    """Streams live MJPEG frames buffered in server memory to all connected browsers/phones with zero-latency event wakeup."""
     def generate():
-        last_sent_time = 0
+        last_frame_id = 0
         start_wait = time.time()
         while time.time() - start_wait < 75:
             if not is_streaming_requested():
                 break
-            with camera_relay.lock:
+            with camera_relay.condition:
+                if camera_relay.frame_id == last_frame_id:
+                    camera_relay.condition.wait(timeout=0.4)
                 frame = camera_relay.latest_frame
-                frame_time = camera_relay.last_frame_time
-            if frame and frame_time != last_sent_time:
-                last_sent_time = frame_time
+                fid = camera_relay.frame_id
+            if frame and fid != last_frame_id:
+                last_frame_id = fid
                 yield (b"--123456789000000000000987654321\r\n"
                        b"Content-Type: image/jpeg\r\n"
                        b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" +
                        frame + b"\r\n")
-            time.sleep(0.01)
 
     resp = Response(
         generate(),
@@ -532,6 +538,7 @@ def video_feed():
     resp.headers["Cache-Control"] = "no-cache, private, no-store, must-revalidate, no-transform"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Connection"] = "close"
     return resp
 
 @app.route("/")
@@ -657,6 +664,9 @@ def app_home():
                 height: 100%;
                 object-fit: contain;
                 display: block;
+                transform: translateZ(0);
+                will-change: transform;
+                backface-visibility: hidden;
             }
             .viewport-overlay-top {
                 position: absolute;
@@ -1400,6 +1410,27 @@ def app_home():
                 }
             }
 
+            // Screen Wake Lock API for Mobile (keeps display on during live video monitoring)
+            let screenWakeLock = null;
+
+            async function acquireWakeLock() {
+                try {
+                    if ('wakeLock' in navigator && !screenWakeLock) {
+                        screenWakeLock = await navigator.wakeLock.request('screen');
+                        screenWakeLock.addEventListener('release', () => {
+                            screenWakeLock = null;
+                        });
+                    }
+                } catch (e) {}
+            }
+
+            function releaseWakeLock() {
+                if (screenWakeLock) {
+                    screenWakeLock.release().catch(() => {});
+                    screenWakeLock = null;
+                }
+            }
+
             let lastToggleTime = 0;
             let userStoppedUntil = 0;
 
@@ -1424,6 +1455,7 @@ def app_home():
                     userStoppedUntil = Date.now() + 4500;
                     watchLiveRequested = false;
                     isStreamingLive = false;
+                    releaseWakeLock();
                     stopFrameFallback();
                     if (btn) btn.classList.remove('streaming-active');
                     if (btnIcon) btnIcon.textContent = '📹';
@@ -1489,6 +1521,7 @@ def app_home():
                         const btnLabel = document.getElementById('watch-live-label');
 
                         if (stream.active) {
+                            acquireWakeLock();
                             if (!isStreamingLive) {
                                 isStreamingLive = true;
                                 if (img) {
@@ -1528,6 +1561,7 @@ def app_home():
                             }
                         } else {
                             // Standby
+                            releaseWakeLock();
                             if (isStreamingLive) {
                                 isStreamingLive = false;
                                 stopFrameFallback();
@@ -1580,6 +1614,11 @@ def app_home():
                     if (!sseInstance || sseInstance.readyState === EventSource.CLOSED) {
                         connectEventStream();
                     }
+                    if (isStreamingLive) {
+                        acquireWakeLock();
+                    }
+                } else {
+                    releaseWakeLock();
                 }
             });
 
