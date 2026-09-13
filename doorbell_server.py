@@ -826,6 +826,35 @@ def app_home():
                 transform: scale(0.93);
                 background: rgba(239, 68, 68, 0.28);
             }
+            .cam-tool-btn {
+                background: rgba(15, 23, 42, 0.8);
+                backdrop-filter: blur(8px);
+                border: 1px solid rgba(255, 255, 255, 0.22);
+                color: #fff;
+                width: 32px;
+                height: 32px;
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                font-size: 15px;
+                transition: all 0.15s ease;
+            }
+            .cam-tool-btn:active {
+                transform: scale(0.92);
+                background: rgba(14, 165, 233, 0.5);
+            }
+            .item-badge.ring {
+                background: rgba(239, 68, 68, 0.18);
+                color: #fca5a5;
+                border: 1px solid rgba(239, 68, 68, 0.35);
+            }
+            .item-badge.motion {
+                background: rgba(245, 158, 11, 0.18);
+                color: #fcd34d;
+                border: 1px solid rgba(245, 158, 11, 0.35);
+            }
 
             .timeline-list {
                 display: flex;
@@ -926,8 +955,8 @@ def app_home():
             <div class="app-title-box">
                 <div class="status-orb" id="status-orb"></div>
                 <div>
-                    <h1 class="app-title">DoorCam Front Door</h1>
-                    <div class="app-subtitle" id="connection-subtitle">OV3660 3MP • System Armed</div>
+                    <h1 class="app-title">🏡 Front Door</h1>
+                    <div class="app-subtitle" id="connection-subtitle">✨ Safe & Protected • AI Monitoring</div>
                 </div>
             </div>
             <div class="app-actions">
@@ -976,6 +1005,10 @@ def app_home():
 
                     <div class="viewport-overlay-bottom">
                         <div class="cam-meta" id="cam-meta-text">OV3660 HD • AI Face Recognition</div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="cam-tool-btn" onclick="saveCurrentSnapshot(event)" title="Save Photo to Device">📸</button>
+                            <button class="cam-tool-btn" onclick="toggleFullscreen(event)" title="Fullscreen View">⛶</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1023,15 +1056,18 @@ def app_home():
 
             <div class="timeline-list" id="timeline-container">
                 {% for v in visits %}
+                {% set is_known = ('Unknown' not in v['name'] and 'Visitor' != v['name']) %}
                 <div class="timeline-item" data-visit-id="{{ v['id'] }}" onclick="openPhotoModal('/photo/{{ v['photo_path'] }}', '{{ v['name'] }}', '{{ v['timestamp'] }}', '{{ v['trigger_source'] }}')">
                     <img class="item-thumb" src="/photo/{{ v['photo_path'] }}" alt="Visitor thumbnail" loading="lazy">
                     <div class="item-info">
-                        <div class="item-name {{ 'known' if 'Unknown' not in v['name'] and 'Visitor' != v['name'] else 'unknown' }}">
-                            {{ v['name'] }}
+                        <div class="item-name {{ 'known' if is_known else 'unknown' }}">
+                            {{ ('💚 Family: ' + v['name']) if is_known else '👤 Visitor / Guest' }}
                         </div>
                         <div class="item-meta">
-                            <span class="item-badge">{{ v['trigger_source'] }}</span>
-                            <span class="item-time">{{ v['timestamp'] }}</span>
+                            <span class="item-badge {{ 'ring' if v['trigger_source'] == 'BUTTON' else 'motion' }}">
+                                {{ '🔔 RING' if v['trigger_source'] == 'BUTTON' else '🚶 MOTION' }}
+                            </span>
+                            <span class="item-time" data-raw-time="{{ v['timestamp'] }}">{{ v['timestamp'] }}</span>
                         </div>
                     </div>
                     <div style="color: var(--text-muted); font-size: 18px;">›</div>
@@ -1055,7 +1091,10 @@ def app_home():
                 <div class="modal-body">
                     <div id="modal-name" style="font-size: 18px; font-weight: 700;"></div>
                     <div id="modal-meta" style="color: var(--text-muted); font-size: 13px; margin-top: 4px;"></div>
-                    <button class="modal-close-btn" onclick="closePhotoModal()">Close</button>
+                    <div style="display: flex; gap: 8px; margin-top: 14px;">
+                        <button class="modal-close-btn" style="background: var(--accent); border: none; margin-top: 0;" onclick="downloadModalPhoto()">📸 Save Photo</button>
+                        <button class="modal-close-btn" style="margin-top: 0;" onclick="closePhotoModal()">Close</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1123,32 +1162,152 @@ def app_home():
             setInterval(updateClock, 1000);
             updateClock();
 
-            // Local Timezone Formatter
+            // Human-Friendly Relative & Local Timezone Formatter
             function formatDisplayTime(rawTs) {
                 if (!rawTs) return '';
                 const str = String(rawTs).trim();
-                // If it's "YYYY-MM-DD HH:MM:SS" (legacy UTC from server)
+                let dateObj = null;
+
+                // If legacy UTC "YYYY-MM-DD HH:MM:SS"
                 if (/^\\d{4}-\\d{2}-\\d{2}\\s\\d{2}:\\d{2}:\\d{2}$/.test(str)) {
                     try {
-                        const d = new Date(str.replace(' ', 'T') + 'Z');
-                        if (!isNaN(d.getTime())) {
-                            return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' +
-                                   d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+                        dateObj = new Date(str.replace(' ', 'T') + 'Z');
+                    } catch (e) {}
+                }
+                // If local IST "YYYY-MM-DD HH:MM:SS AM/PM"
+                else if (/^\\d{4}-\\d{2}-\\d{2}\\s/.test(str)) {
+                    try {
+                        const parts = str.split(' ');
+                        if (parts.length >= 3) {
+                            const [y, m, d] = parts[0].split('-').map(Number);
+                            const timeParts = parts[1].split(':').map(Number);
+                            let hr = timeParts[0];
+                            const min = timeParts[1];
+                            const sec = timeParts[2] || 0;
+                            const isPm = parts[2].toUpperCase() === 'PM';
+                            if (isPm && hr < 12) hr += 12;
+                            if (!isPm && hr === 12) hr = 0;
+                            dateObj = new Date(y, m - 1, d, hr, min, sec);
                         }
                     } catch (e) {}
                 }
-                // If it's "YYYY-MM-DD HH:MM:SS AM/PM" (local IST from visitor_log)
-                if (/^\\d{4}-\\d{2}-\\d{2}\\s/.test(str)) {
-                    const parts = str.split(' ');
-                    if (parts.length >= 3) {
-                        const dateParts = parts[0].split('-');
-                        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-                        const mIdx = parseInt(dateParts[1], 10) - 1;
-                        const monthStr = monthNames[mIdx] || dateParts[1];
-                        return `${monthStr} ${parseInt(dateParts[2], 10)}, ${parts[1]} ${parts[2]}`;
+
+                if (dateObj && !isNaN(dateObj.getTime())) {
+                    const now = new Date();
+                    const diffSec = Math.floor((now.getTime() - dateObj.getTime()) / 1000);
+                    const timeStr = dateObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+
+                    if (diffSec >= 0 && diffSec < 45) {
+                        return 'Just now';
                     }
+                    if (diffSec >= 45 && diffSec < 3600) {
+                        const mins = Math.floor(diffSec / 60);
+                        return mins + ' min' + (mins === 1 ? '' : 's') + ' ago';
+                    }
+                    const isToday = now.toDateString() === dateObj.toDateString();
+                    if (isToday) {
+                        return 'Today, ' + timeStr;
+                    }
+                    const yesterday = new Date(now);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    if (yesterday.toDateString() === dateObj.toDateString()) {
+                        return 'Yesterday, ' + timeStr;
+                    }
+                    return dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + timeStr;
                 }
                 return str;
+            }
+
+            // Viewport Snapshot Save to Gallery
+            function saveCurrentSnapshot(e) {
+                if (e) e.stopPropagation();
+                const now = new Date();
+                const filename = 'DoorCam_' + now.getFullYear() + '-' + 
+                                 String(now.getMonth()+1).padStart(2, '0') + '-' + 
+                                 String(now.getDate()).padStart(2, '0') + '_' + 
+                                 String(now.getHours()).padStart(2, '0') + '-' + 
+                                 String(now.getMinutes()).padStart(2, '0') + '-' + 
+                                 String(now.getSeconds()).padStart(2, '0') + '.jpg';
+                
+                const src = isStreamingLive ? ('/api/latest_frame?' + Date.now()) : (currentSnapshotUrl || '/api/latest_frame');
+                fetch(src)
+                    .then(r => r.blob())
+                    .then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showMiniToast('📸 Photo saved to your device!');
+                    })
+                    .catch(() => {
+                        window.open(src, '_blank');
+                    });
+            }
+
+            // Fullscreen Viewport Toggle
+            function toggleFullscreen(e) {
+                if (e) e.stopPropagation();
+                const card = document.querySelector('.cctv-card');
+                if (!card) return;
+                if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                    if (card.requestFullscreen) {
+                        card.requestFullscreen().catch(() => {});
+                    } else if (card.webkitRequestFullscreen) {
+                        card.webkitRequestFullscreen();
+                    }
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen().catch(() => {});
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    }
+                }
+            }
+
+            // Download Photo from Modal
+            function downloadModalPhoto() {
+                const img = document.getElementById('modal-img');
+                if (!img || !img.src) return;
+                const now = new Date();
+                const filename = 'DoorCam_Visitor_' + now.toISOString().slice(0, 10) + '.jpg';
+                fetch(img.src)
+                    .then(r => r.blob())
+                    .then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showMiniToast('📸 Photo saved to your device!');
+                    })
+                    .catch(() => {
+                        window.open(img.src, '_blank');
+                    });
+            }
+
+            // Mini Toast Popup Notification
+            function showMiniToast(msg) {
+                let toast = document.getElementById('mini-toast');
+                if (!toast) {
+                    toast = document.createElement('div');
+                    toast.id = 'mini-toast';
+                    toast.style.cssText = 'position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(20px); background: rgba(15, 23, 42, 0.95); border: 1px solid var(--accent); color: #fff; padding: 10px 22px; border-radius: 30px; font-size: 13px; font-weight: 600; z-index: 999; box-shadow: 0 10px 30px rgba(0,0,0,0.6); backdrop-filter: blur(10px); pointer-events: none; transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); opacity: 0;';
+                    document.body.appendChild(toast);
+                }
+                toast.textContent = msg;
+                toast.style.opacity = '1';
+                toast.style.transform = 'translateX(-50%) translateY(0)';
+                setTimeout(() => {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateX(-50%) translateY(20px)';
+                }, 2600);
             }
 
             // Web Audio API Synthesizer for Doorbell Chime
@@ -1224,6 +1383,7 @@ def app_home():
                 if ('vibrate' in navigator) {
                     navigator.vibrate([200, 100, 200, 100, 400]);
                 }
+                showMiniToast('🔔 Doorbell chime played!');
             }
 
             let latestVisitId = {{ visits[0]['id'] if visits else 0 }};
@@ -1295,6 +1455,11 @@ def app_home():
                     placeholder.style.display = 'none';
                 }
 
+                const isKnown = v.name && !v.name.includes('Unknown') && v.name !== 'Visitor';
+                const friendlyName = isKnown ? ('💚 Family: ' + v.name) : '👤 Visitor / Guest';
+                const greetingTitle = isKnown ? ('👋 ' + v.name + ' is at the door!') : (v.trigger === 'BUTTON' ? '🔔 Doorbell Ringing!' : '👤 Visitor at front door');
+                const displayTs = formatDisplayTime(v.timestamp);
+
                 // 2. Play sound and vibrate if incoming live alert
                 if (isLiveAlert) {
                     playChime();
@@ -1307,11 +1472,10 @@ def app_home():
                     const toastImg = document.getElementById('toast-img');
                     const toastTitle = document.getElementById('toast-title');
                     const toastTime = document.getElementById('toast-time');
-                    const displayTs = formatDisplayTime(v.timestamp);
                     if (toast && toastImg && toastTitle && toastTime) {
                         toastImg.src = v.photo_url;
-                        toastTitle.textContent = v.name;
-                        toastTime.textContent = (v.trigger || 'Alert') + ' • ' + (displayTs || 'Just now');
+                        toastTitle.textContent = greetingTitle;
+                        toastTime.textContent = (v.trigger === 'BUTTON' ? 'Doorbell Ring' : 'Motion') + ' • ' + (displayTs || 'Just now');
                         toast.style.display = 'block';
                         clearTimeout(toastTimeout);
                         toastTimeout = setTimeout(() => {
@@ -1321,8 +1485,8 @@ def app_home():
 
                     // 4. Trigger OS Notification
                     if (Notification.permission === 'granted') {
-                        new Notification("🔔 DoorCam Alert: " + v.name, {
-                            body: (v.trigger || 'Visitor') + " detected at front door",
+                        new Notification("🔔 DoorCam: " + greetingTitle, {
+                            body: "Front door activity detected",
                             icon: v.photo_url
                         });
                     }
@@ -1334,8 +1498,8 @@ def app_home():
                 if (noMsg) noMsg.remove();
 
                 if (container) {
-                    const displayTs = formatDisplayTime(v.timestamp);
-                    const isKnown = v.name && !v.name.includes('Unknown') && v.name !== 'Visitor';
+                    const badgeClass = v.trigger === 'BUTTON' ? 'ring' : 'motion';
+                    const badgeLabel = v.trigger === 'BUTTON' ? '🔔 RING' : '🚶 MOTION';
                     const item = document.createElement('div');
                     item.className = 'timeline-item';
                     if (visitId) item.setAttribute('data-visit-id', visitId);
@@ -1343,10 +1507,10 @@ def app_home():
                     item.innerHTML = `
                         <img class="item-thumb" src="${v.photo_url}" alt="Thumbnail">
                         <div class="item-info">
-                            <div class="item-name ${isKnown ? 'known' : 'unknown'}">${v.name}</div>
+                            <div class="item-name ${isKnown ? 'known' : 'unknown'}">${friendlyName}</div>
                             <div class="item-meta">
-                                <span class="item-badge">${v.trigger || 'VISITOR'}</span>
-                                <span class="item-time">${displayTs}</span>
+                                <span class="item-badge ${badgeClass}">${badgeLabel}</span>
+                                <span class="item-time" data-raw-time="${v.timestamp}">${displayTs}</span>
                             </div>
                         </div>
                         <div style="color: var(--text-muted); font-size: 18px;">›</div>
@@ -1372,13 +1536,15 @@ def app_home():
                 const visitId = data.visit_id;
                 const newName = data.name || 'Visitor';
                 const isKnown = newName && !newName.includes('Unknown') && newName !== 'Visitor' && !newName.includes('...');
+                const friendlyName = isKnown ? ('💚 Family: ' + newName) : '👤 Visitor / Guest';
+                const greetingTitle = isKnown ? ('👋 ' + newName + ' is at the door!') : '👤 Visitor at front door';
 
                 // 1. Update timeline item if present
                 const item = document.querySelector(`[data-visit-id="${visitId}"]`);
                 if (item) {
                     const nameEl = item.querySelector('.item-name');
                     if (nameEl) {
-                        nameEl.textContent = newName;
+                        nameEl.textContent = friendlyName;
                         nameEl.className = 'item-name ' + (isKnown ? 'known' : 'unknown');
                     }
                 }
@@ -1387,7 +1553,7 @@ def app_home():
                 const toastTitle = document.getElementById('toast-title');
                 const toast = document.getElementById('alert-toast');
                 if (toast && toast.style.display !== 'none' && toastTitle) {
-                    toastTitle.textContent = newName;
+                    toastTitle.textContent = greetingTitle;
                 }
             }
 
@@ -1444,9 +1610,12 @@ def app_home():
 
             // Modal Handlers
             function openPhotoModal(photoUrl, name, time, trigger) {
+                const isKnown = name && !name.includes('Unknown') && name !== 'Visitor';
+                const friendlyName = isKnown ? ('💚 Family: ' + name) : '👤 Visitor / Guest';
+                const triggerLabel = (trigger === 'BUTTON' || trigger === 'RING') ? '🔔 Doorbell Ring' : '🚶 Motion Alert';
                 document.getElementById('modal-img').src = photoUrl;
-                document.getElementById('modal-name').textContent = name;
-                document.getElementById('modal-meta').textContent = trigger + " • " + formatDisplayTime(time);
+                document.getElementById('modal-name').textContent = friendlyName;
+                document.getElementById('modal-meta').textContent = triggerLabel + " • " + formatDisplayTime(time);
                 document.getElementById('photo-modal').style.display = 'flex';
             }
             function closePhotoModal(e) {
