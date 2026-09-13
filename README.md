@@ -3,14 +3,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--CAM%20%7C%20OV3660-blue.svg)](https://www.espressif.com/)
 [![Firmware](https://img.shields.io/badge/Firmware-C%2B%2B%20%2F%20FreeRTOS-00599C.svg)](https://www.arduino.cc/)
-[![Cloud Deployment](https://img.shields.io/badge/Cloud-Render%20%7C%20Docker-46E3B7.svg)](https://doorcam.onrender.com)
+[![Deployment](https://img.shields.io/badge/Deployment-Docker%20%7C%20Cloud%20%7C%20Local-46E3B7.svg)](#-deployment--getting-started)
 [![Backend](https://img.shields.io/badge/Backend-Python%20%7C%20Flask-3776AB.svg)](https://flask.palletsprojects.com/)
 [![AI / CV](https://img.shields.io/badge/AI-OpenCV%20%7C%20dlib%20ResNet-5C3EE8.svg)](https://github.com/ageitgey/face_recognition)
 [![Client](https://img.shields.io/badge/Client-PWA%20%7C%20SSE%20%7C%20Web%20Audio-FF6F00.svg)](https://developer.mozilla.org/)
 
 An autonomous, enterprise-grade smart video doorbell and surveillance system engineered from the silicon up. DoorCam pairs an **ESP32-CAM (AI-Thinker with OV3660 3MP sensor)** edge device with a multi-threaded Python cloud backend, local **128-dimensional deep metric facial recognition**, and an installable **Progressive Web App (PWA)** featuring **24/7 on-demand live cloud streaming**, **sub-2-second instant doorbell alerting**, and zero-refresh real-time synchronization.
 
-> 🌐 **Live Cloud App:** [https://doorcam.onrender.com](https://doorcam.onrender.com)  
+> 🔒 **Private & Self-Hosted:** Designed for deployment on private cloud containers (Docker / Render) or home local servers with zero open inbound firewall ports.  
 > Built as an end-to-end hardware, firmware, and software engineering system demonstrating embedded C++/FreeRTOS programming, low-latency socket networking, asynchronous machine learning pipelines, and modern web engineering.
 
 ---
@@ -21,13 +21,12 @@ An autonomous, enterprise-grade smart video doorbell and surveillance system eng
 sequenceDiagram
     autonumber
     actor Visitor
-    actor Owner as Homeowner (Phone / Web PWA)
-    participant ESP as ESP32-CAM (Edge Device)
-    participant Cloud as Render Cloud Server (Flask)
-    participant AI as Face AI Worker Thread (dlib)
-    participant Push as Mobile Push (ntfy.sh)
+    actor Owner as Homeowner (Phone / PWA)
+    participant ESP as ESP32-CAM (Edge)
+    participant Cloud as Cloud Server (Flask)
+    participant AI as Face AI Worker (dlib)
+    participant Push as Mobile Push (ntfy)
 
-    rect rgb(20, 30, 45)
     Note over Owner,Cloud: Workflow A: 24/7 On-Demand Live Streaming
     Owner->>Cloud: Clicks "Watch Live Stream" (POST /api/stream/start)
     Cloud->>Cloud: Arm stream demand flag (60s safety timeout)
@@ -36,24 +35,21 @@ sequenceDiagram
     ESP->>Cloud: Pushes live MJPEG frames (13-15 FPS) to /api/stream_push
     Cloud-->>Owner: Multiplexes /video_feed to all connected devices
     Owner->>Cloud: Clicks "Stop Stream" (POST /api/stream/stop)
-    Cloud-->>ESP: Stream stops; ESP returns to low-power standby
-    end
+    Cloud-->>ESP: Stream stops; ESP returns to standby
 
-    rect rgb(30, 25, 40)
     Note over Visitor,Owner: Workflow B: Physical Doorbell Ring (< 2s Alert)
-    Visitor->>ESP: Presses Physical Doorbell Button (GPIO 14 -> GND)
+    Visitor->>ESP: Presses Doorbell Button (GPIO 14 -> GND)
     ESP->>ESP: Hardware Debounce Filter (40ms) + Capture HD Snapshot
     ESP->>Cloud: POST /visitor?trigger=BUTTON (multipart snapshot photo)
     Note over Cloud: Latency: < 10ms (Zero blocking)
     Cloud-->>Owner: Broadcasts SSE event {"type": "visitor", "name": "Doorbell Ringing..."}
-    Owner-->>Owner: Plays Web Audio Chime (Ding-Dong 660Hz->523Hz) + Haptic Vibration
-    Cloud-->>ESP: HTTP 200 OK -> ESP immediately begins 30s live stream
+    Owner-->>Owner: Plays Web Audio Chime (Ding-Dong 660Hz->523Hz) + Vibration
+    Cloud-->>ESP: HTTP 200 OK -> ESP begins 30s live stream
     Cloud->>AI: Offloads snapshot to background daemon thread
     AI->>AI: Computes HOG + 128D ResNet Embeddings (matches "Arush" vs Unknown)
     AI-->>Cloud: Updates SQLite DB with identity & confidence
     Cloud-->>Owner: Broadcasts SSE {"type": "visitor_update", "name": "Arush"}
-    Cloud-->>Push: Dispatches rich push notification with photo to lock screen
-    end
+    Cloud-->>Push: Dispatches push notification with photo to lock screen
 ```
 
 ---
