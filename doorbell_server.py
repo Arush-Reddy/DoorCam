@@ -31,7 +31,7 @@ import json
 import queue
 import threading
 import urllib.request
-from flask import Flask, request, jsonify, send_from_directory, render_template_string, Response
+from flask import Flask, request, jsonify, send_from_directory, render_template_string, Response, make_response
 
 import config
 import notify
@@ -435,13 +435,24 @@ def stream_status():
         "remaining_sec": remaining
     })
 
+@app.route("/api/latest_frame")
+def get_latest_frame():
+    """Returns the most recent single JPEG frame from camera memory buffer."""
+    with camera_relay.lock:
+        frame = camera_relay.latest_frame
+    if frame:
+        resp = Response(frame, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return resp
+    return "No frame", 404
 
 @app.route("/video_feed")
 def video_feed():
     """Streams live MJPEG frames buffered in server memory to all connected browsers/phones."""
     def generate():
         last_sent_time = 0
-        while True:
+        start_wait = time.time()
+        while time.time() - start_wait < 90:
             with camera_relay.lock:
                 frame = camera_relay.latest_frame
                 frame_time = camera_relay.last_frame_time
@@ -451,12 +462,15 @@ def video_feed():
                        b"Content-Type: image/jpeg\r\n"
                        b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" +
                        frame + b"\r\n")
-            time.sleep(0.01) # Low CPU poll, instant delivery on fresh frame
+            time.sleep(0.01)
 
-    return Response(
+    resp = Response(
         generate(),
         mimetype="multipart/x-mixed-replace; boundary=123456789000000000000987654321"
     )
+    resp.headers["Cache-Control"] = "no-cache, private, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 @app.route("/")
 def app_home():
@@ -1162,11 +1176,7 @@ def app_home():
                 });
             }
 
-            // Stream Fallback
-            function handleStreamError(img) {
-                document.getElementById('live-label').textContent = 'OFFLINE';
-                console.log("Stream offline or unavailable");
-            }
+
 
             // Modal Handlers
             function openPhotoModal(photoUrl, name, time, trigger) {
@@ -1239,25 +1249,73 @@ def app_home():
             let isStreamingLive = false;
             let currentSnapshotUrl = '{{ ("/photo/" + latest_visit["photo_path"]) if latest_visit else "" }}';
             let watchLiveRequested = false;
+            let frameFallbackInterval = null;
+
+            function startFrameFallback() {
+                if (frameFallbackInterval) return;
+                console.log("Starting frame-by-frame live stream fallback");
+                frameFallbackInterval = setInterval(() => {
+                    if (!isStreamingLive) {
+                        clearInterval(frameFallbackInterval);
+                        frameFallbackInterval = null;
+                        return;
+                    }
+                    const img = document.getElementById('cam-feed');
+                    if (img) {
+                        const tempImg = new Image();
+                        tempImg.onload = () => {
+                            if (isStreamingLive) img.src = tempImg.src;
+                        };
+                        tempImg.src = '/api/latest_frame?' + Date.now();
+                    }
+                }, 120);
+            }
+
+            function stopFrameFallback() {
+                if (frameFallbackInterval) {
+                    clearInterval(frameFallbackInterval);
+                    frameFallbackInterval = null;
+                }
+            }
+
+            function handleStreamError(img) {
+                if (isStreamingLive || watchLiveRequested) {
+                    startFrameFallback();
+                } else {
+                    const label = document.getElementById('live-label');
+                    if (label) label.textContent = 'STANDBY';
+                }
+            }
 
             function toggleWatchLive() {
                 const btn = document.getElementById('btn-watch-live');
                 const btnIcon = document.getElementById('watch-live-icon');
                 const btnLabel = document.getElementById('watch-live-label');
+                const label = document.getElementById('live-label');
+                const meta = document.getElementById('cam-meta-text');
+                const img = document.getElementById('cam-feed');
 
-                if (watchLiveRequested || (btn && btn.classList.contains('streaming-active'))) {
-                    // Stop Stream
+                if (watchLiveRequested || isStreamingLive || (btn && btn.classList.contains('streaming-active'))) {
+                    // User clicked STOP
                     watchLiveRequested = false;
+                    isStreamingLive = false;
+                    stopFrameFallback();
                     if (btn) btn.classList.remove('streaming-active');
                     if (btnIcon) btnIcon.textContent = '📹';
                     if (btnLabel) {
                         btnLabel.textContent = 'Watch Live Stream';
                         btnLabel.style.color = 'var(--accent-light)';
                     }
+                    if (label) {
+                        label.textContent = 'STANDBY';
+                        label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
+                    }
+                    if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
+                    if (img && currentSnapshotUrl) img.src = currentSnapshotUrl;
                     fetch('/api/stream/stop', { method: 'POST' })
                         .finally(() => checkStreamStatus());
                 } else {
-                    // Start Stream
+                    // User clicked START
                     watchLiveRequested = true;
                     if (btn) btn.classList.add('streaming-active');
                     if (btnIcon) btnIcon.textContent = '⏳';
@@ -1265,6 +1323,11 @@ def app_home():
                         btnLabel.textContent = 'Connecting Camera...';
                         btnLabel.style.color = '#fca5a5';
                     }
+                    if (label) {
+                        label.textContent = '● CONNECTING...';
+                        label.parentElement.style.background = 'rgba(245, 158, 11, 0.95)';
+                    }
+                    if (meta) meta.textContent = 'Signaling ESP32 camera over cloud...';
                     fetch('/api/stream/start', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
@@ -1282,7 +1345,11 @@ def app_home():
                             btnLabel.textContent = 'Watch Live Stream';
                             btnLabel.style.color = 'var(--accent-light)';
                         }
-                        alert('Could not connect to live stream: ' + err);
+                        if (label) {
+                            label.textContent = 'STANDBY';
+                            label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
+                        }
+                        alert('Could not start live stream: ' + err);
                     });
                 }
             }
@@ -1307,7 +1374,7 @@ def app_home():
                             label.textContent = '● LIVE (' + (data.fps > 0 ? data.fps + ' FPS' : '30s') + ')';
                             label.parentElement.style.background = 'rgba(239, 68, 68, 0.95)';
                             if (meta) meta.textContent = 'Live Cloud Stream • ' + data.fps + ' FPS';
-                            if (btn && (data.demand || watchLiveRequested)) {
+                            if (btn) {
                                 btn.classList.add('streaming-active');
                                 if (btnIcon) btnIcon.textContent = '⏹️';
                                 if (btnLabel) {
@@ -1316,15 +1383,30 @@ def app_home():
                                     btnLabel.style.color = '#fca5a5';
                                 }
                             }
+                        } else if (data.demand || watchLiveRequested) {
+                            // Connecting phase: camera is waking up
+                            label.textContent = '● CONNECTING...';
+                            label.parentElement.style.background = 'rgba(245, 158, 11, 0.95)';
+                            if (meta) meta.textContent = 'Connecting to camera stream...';
+                            if (btn) {
+                                btn.classList.add('streaming-active');
+                                if (btnIcon) btnIcon.textContent = '⏳';
+                                if (btnLabel) {
+                                    btnLabel.textContent = 'Connecting...';
+                                    btnLabel.style.color = '#fca5a5';
+                                }
+                            }
                         } else {
+                            // Standby
                             if (isStreamingLive) {
                                 isStreamingLive = false;
+                                stopFrameFallback();
                                 if (currentSnapshotUrl) img.src = currentSnapshotUrl;
                             }
                             label.textContent = 'STANDBY';
                             label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
                             if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
-                            if (btn && !data.demand) {
+                            if (btn) {
                                 watchLiveRequested = false;
                                 btn.classList.remove('streaming-active');
                                 if (btnIcon) btnIcon.textContent = '📹';
@@ -1355,7 +1437,7 @@ def app_home():
     </body>
     </html>
     """
-    return render_template_string(
+    resp = make_response(render_template_string(
         html,
         visits=visits,
         known_count=known_count,
@@ -1364,7 +1446,11 @@ def app_home():
         tunnel_url=tunnel.get_public_url(),
         latest_visit=latest_visit,
         is_active_stream=camera_relay.is_active()
-    )
+    ))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 @app.route("/photo/<path:filename>")
 def serve_photo(filename):
