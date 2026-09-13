@@ -191,16 +191,20 @@ def events_stream():
         try:
             while True:
                 try:
-                    event = client_queue.get(timeout=20.0)
+                    event = client_queue.get(timeout=10.0)
                     yield f"data: {json.dumps(event)}\n\n"
                 except queue.Empty:
-                    # Keep-alive heartbeat
+                    # Keep-alive heartbeat every 10s to prevent reverse proxy timeouts
                     yield ": ping\n\n"
         except GeneratorExit:
             if client_queue in event_subscribers:
                 event_subscribers.remove(client_queue)
 
-    return Response(event_stream(), mimetype="text/event-stream")
+    resp = Response(event_stream(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache, no-transform"
+    resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Connection"] = "keep-alive"
+    return resp
 
 @app.route("/api/config", methods=["GET", "POST"])
 def update_config():
@@ -433,6 +437,39 @@ def stream_status():
         "age_sec": round(now - camera_relay.last_frame_time, 1) if camera_relay.last_frame_time else 999,
         "demand": is_streaming_requested(),
         "remaining_sec": remaining
+    })
+
+@app.route("/api/live_state")
+def live_state():
+    """Aggregated real-time state: live stream, latest visitor, PIR status."""
+    now = time.time()
+    active = camera_relay.is_active()
+    remaining = max(0, int(stream_demand_expiry - now)) if stream_demand_active else 0
+    if not remaining and ring_stream_expiry > now:
+        remaining = max(0, int(ring_stream_expiry - now))
+
+    recent = visitor_log.get_recent_visits(limit=1)
+    latest = None
+    if recent:
+        r = recent[0]
+        photo_rel = r.get("photo_path", "")
+        latest = {
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "trigger": r.get("trigger_source"),
+            "timestamp": r.get("timestamp"),
+            "photo_url": f"/photo/{photo_rel.replace(chr(92), '/')}"
+        }
+
+    return jsonify({
+        "stream": {
+            "active": active,
+            "fps": getattr(camera_relay, "fps", 0),
+            "demand": is_streaming_requested(),
+            "remaining_sec": remaining
+        },
+        "latest_visit": latest,
+        "pir_enabled": pir_alerts_enabled
     })
 
 # PIR Motion Alerts State (default False to prevent false motion triggers)
@@ -867,17 +904,16 @@ def app_home():
             <!-- CCTV Video Player -->
             <div class="cctv-card">
                 <div class="video-viewport">
-                    {% if is_active_stream %}
-                        <img id="cam-feed" class="camera-stream" src="/video_feed" onerror="handleStreamError(this)" alt="Live Feed">
-                    {% elif latest_visit %}
-                        <img id="cam-feed" class="camera-stream" src="/photo/{{ latest_visit['photo_path'] }}" alt="Latest Snapshot">
-                    {% else %}
-                        <div style="text-align:center; padding: 40px 20px; color: var(--text-muted);">
-                            <div style="font-size: 36px; margin-bottom: 8px;">📹</div>
-                            <div style="font-size: 14px; font-weight: 600; color: #fff;">Camera Standby</div>
-                            <div style="font-size: 12px; margin-top: 4px;">Press doorbell button to stream live video</div>
-                        </div>
-                    {% endif %}
+                    <img id="cam-feed" class="camera-stream" 
+                         src="{{ '/video_feed' if is_active_stream else ('/photo/' + latest_visit['photo_path'] if latest_visit else '') }}" 
+                         onerror="handleStreamError(this)" 
+                         alt="Camera Feed"
+                         style="{{ '' if (is_active_stream or latest_visit) else 'display: none;' }}">
+                    <div id="cam-placeholder" style="text-align:center; padding: 40px 20px; color: var(--text-muted); {{ 'display: none;' if (is_active_stream or latest_visit) else '' }}">
+                        <div style="font-size: 36px; margin-bottom: 8px;">📹</div>
+                        <div style="font-size: 14px; font-weight: 600; color: #fff;">Camera Standby</div>
+                        <div style="font-size: 12px; margin-top: 4px;">Press doorbell button or click Watch Live</div>
+                    </div>
 
                     <!-- Viewport Overlays -->
                     <div class="viewport-overlay-top">
@@ -934,7 +970,7 @@ def app_home():
 
             <div class="timeline-list" id="timeline-container">
                 {% for v in visits %}
-                <div class="timeline-item" onclick="openPhotoModal('/photo/{{ v['photo_path'] }}', '{{ v['name'] }}', '{{ v['timestamp'] }}', '{{ v['trigger_source'] }}')">
+                <div class="timeline-item" data-visit-id="{{ v['id'] }}" onclick="openPhotoModal('/photo/{{ v['photo_path'] }}', '{{ v['name'] }}', '{{ v['timestamp'] }}', '{{ v['trigger_source'] }}')">
                     <img class="item-thumb" src="/photo/{{ v['photo_path'] }}" alt="Visitor thumbnail" loading="lazy">
                     <div class="item-info">
                         <div class="item-name {{ 'known' if 'Unknown' not in v['name'] and 'Visitor' != v['name'] else 'unknown' }}">
@@ -1093,85 +1129,145 @@ def app_home():
                 }
             }
 
+            let latestVisitId = {{ visits[0]['id'] if visits else 0 }};
+            let isStreamingLive = false;
+            let currentSnapshotUrl = '{{ ("/photo/" + latest_visit["photo_path"]) if latest_visit else "" }}';
+            let watchLiveRequested = false;
+            let frameFallbackInterval = null;
+            let sseInstance = null;
+            let toastTimeout = null;
+
             // Real-time Event Stream (SSE)
             function connectEventStream() {
-                const sse = new EventSource('/api/events/stream');
+                if (sseInstance) {
+                    try { sseInstance.close(); } catch (e) {}
+                }
                 const orb = document.getElementById('status-orb');
+                sseInstance = new EventSource('/api/events/stream');
 
-                sse.onopen = () => {
-                    orb.style.background = 'var(--success)';
-                    orb.style.boxShadow = '0 0 10px var(--success)';
-                };
-
-                sse.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        if (data.type === 'visitor') {
-                            handleIncomingVisitor(data);
-                        }
-                    } catch (e) {
-                        // Keep-alive or non-JSON
+                sseInstance.onopen = () => {
+                    if (orb) {
+                        orb.style.background = 'var(--success)';
+                        orb.style.boxShadow = '0 0 10px var(--success)';
                     }
                 };
 
-                sse.onerror = () => {
-                    orb.style.background = 'var(--danger)';
-                    orb.style.boxShadow = '0 0 10px var(--danger)';
-                    sse.close();
-                    setTimeout(connectEventStream, 4000);
+                sseInstance.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'visitor') {
+                            handleIncomingVisitor(data, true);
+                        }
+                    } catch (e) {}
+                };
+
+                sseInstance.onerror = () => {
+                    if (orb) {
+                        orb.style.background = 'var(--danger)';
+                        orb.style.boxShadow = '0 0 10px var(--danger)';
+                    }
+                    try { sseInstance.close(); } catch (e) {}
+                    setTimeout(connectEventStream, 3500);
                 };
             }
             connectEventStream();
 
-            function handleIncomingVisitor(v) {
-                // 1. Play chime sound
-                playChime();
-
-                // 2. Vibrate phone
-                if ('vibrate' in navigator) {
-                    navigator.vibrate([200, 100, 200, 100, 400]);
+            function handleIncomingVisitor(v, isLiveAlert = true) {
+                if (!v) return;
+                const visitId = v.visit_id || v.id || 0;
+                if (visitId && visitId <= latestVisitId && document.querySelector(`[data-visit-id="${visitId}"]`)) {
+                    return; // Already processed
+                }
+                if (visitId > latestVisitId) {
+                    latestVisitId = visitId;
                 }
 
-                // 3. Show In-App Banner
-                const toast = document.getElementById('alert-toast');
-                document.getElementById('toast-img').src = v.photo_url;
-                document.getElementById('toast-title').textContent = v.name;
-                document.getElementById('toast-time').textContent = v.trigger + ' • ' + v.timestamp;
-                toast.style.display = 'block';
-
-                // 4. Trigger OS Notification
-                if (Notification.permission === 'granted') {
-                    new Notification("🔔 DoorCam Alert: " + v.name, {
-                        body: v.trigger + " detected at front door",
-                        icon: v.photo_url
-                    });
+                // 1. Update camera snapshot & viewport immediately
+                currentSnapshotUrl = v.photo_url;
+                const camFeed = document.getElementById('cam-feed');
+                const placeholder = document.getElementById('cam-placeholder');
+                if (camFeed && !isStreamingLive) {
+                    camFeed.src = v.photo_url;
+                    camFeed.style.display = 'block';
+                }
+                if (placeholder) {
+                    placeholder.style.display = 'none';
                 }
 
-                // 5. Prepend to timeline list
+                // 2. Play sound and vibrate if incoming live alert
+                if (isLiveAlert) {
+                    playChime();
+                    if ('vibrate' in navigator) {
+                        navigator.vibrate([200, 100, 200, 100, 400]);
+                    }
+
+                    // 3. Show In-App Toast Banner with 8s auto-dismiss
+                    const toast = document.getElementById('alert-toast');
+                    const toastImg = document.getElementById('toast-img');
+                    const toastTitle = document.getElementById('toast-title');
+                    const toastTime = document.getElementById('toast-time');
+                    if (toast && toastImg && toastTitle && toastTime) {
+                        toastImg.src = v.photo_url;
+                        toastTitle.textContent = v.name;
+                        toastTime.textContent = (v.trigger || 'Alert') + ' • ' + (v.timestamp || 'Just now');
+                        toast.style.display = 'block';
+                        clearTimeout(toastTimeout);
+                        toastTimeout = setTimeout(() => {
+                            toast.style.display = 'none';
+                        }, 8000);
+                    }
+
+                    // 4. Trigger OS Notification
+                    if (Notification.permission === 'granted') {
+                        new Notification("🔔 DoorCam Alert: " + v.name, {
+                            body: (v.trigger || 'Visitor') + " detected at front door",
+                            icon: v.photo_url
+                        });
+                    }
+                }
+
+                // 5. Prepend to timeline list smoothly
                 const container = document.getElementById('timeline-container');
                 const noMsg = document.getElementById('no-events-msg');
                 if (noMsg) noMsg.remove();
 
-                const isKnown = !v.name.includes('Unknown') && v.name !== 'Visitor';
-                const item = document.createElement('div');
-                item.className = 'timeline-item';
-                item.onclick = () => openPhotoModal(v.photo_url, v.name, v.timestamp, v.trigger);
-                item.innerHTML = `
-                    <img class="item-thumb" src="${v.photo_url}" alt="Thumbnail">
-                    <div class="item-info">
-                        <div class="item-name ${isKnown ? 'known' : 'unknown'}">${v.name}</div>
-                        <div class="item-meta">
-                            <span class="item-badge">${v.trigger}</span>
-                            <span>${v.timestamp}</span>
+                if (container) {
+                    const isKnown = v.name && !v.name.includes('Unknown') && v.name !== 'Visitor';
+                    const item = document.createElement('div');
+                    item.className = 'timeline-item';
+                    if (visitId) item.setAttribute('data-visit-id', visitId);
+                    item.onclick = () => openPhotoModal(v.photo_url, v.name, v.timestamp, v.trigger || 'VISITOR');
+                    item.innerHTML = `
+                        <img class="item-thumb" src="${v.photo_url}" alt="Thumbnail">
+                        <div class="item-info">
+                            <div class="item-name ${isKnown ? 'known' : 'unknown'}">${v.name}</div>
+                            <div class="item-meta">
+                                <span class="item-badge">${v.trigger || 'VISITOR'}</span>
+                                <span>${v.timestamp}</span>
+                            </div>
                         </div>
-                    </div>
-                    <div style="color: var(--text-muted); font-size: 18px;">›</div>
-                `;
-                container.prepend(item);
+                        <div style="color: var(--text-muted); font-size: 18px;">›</div>
+                    `;
+                    container.prepend(item);
+
+                    // 6. Update feed counter live
+                    const feedCount = document.querySelector('.feed-count');
+                    if (feedCount) {
+                        const total = container.querySelectorAll('.timeline-item').length;
+                        feedCount.textContent = total + ' event' + (total === 1 ? '' : 's');
+                    }
+                }
+
+                // 7. If button triggered, live stream starts automatically on ESP32 - sync immediately
+                if (v.trigger === 'BUTTON') {
+                    syncLiveState();
+                }
             }
 
             function dismissToast() {
-                document.getElementById('alert-toast').style.display = 'none';
+                const toast = document.getElementById('alert-toast');
+                if (toast) toast.style.display = 'none';
+                clearTimeout(toastTimeout);
             }
 
             function enablePushNotifications() {
@@ -1186,8 +1282,6 @@ def app_home():
                     }
                 });
             }
-
-
 
             // Modal Handlers
             function openPhotoModal(photoUrl, name, time, trigger) {
@@ -1256,15 +1350,9 @@ def app_home():
                 }
             }
 
-            // Live Cloud Stream Controller: Watch Live on demand and auto-switch on doorbell ring
-            let isStreamingLive = false;
-            let currentSnapshotUrl = '{{ ("/photo/" + latest_visit["photo_path"]) if latest_visit else "" }}';
-            let watchLiveRequested = false;
-            let frameFallbackInterval = null;
-
+            // Live Cloud Stream & State Controller (Zero-refresh real-time sync)
             function startFrameFallback() {
                 if (frameFallbackInterval) return;
-                console.log("Starting frame-by-frame live stream fallback");
                 frameFallbackInterval = setInterval(() => {
                     if (!isStreamingLive) {
                         clearInterval(frameFallbackInterval);
@@ -1309,15 +1397,14 @@ def app_home():
                 const meta = document.getElementById('cam-meta-text');
                 const img = document.getElementById('cam-feed');
 
-                // If currently connecting, don't allow immediate accidental cancel on rapid taps
                 if (watchLiveRequested && !isStreamingLive) {
                     if (now - lastToggleTime < 2500) {
-                        return; // Waiting for camera to start
+                        return;
                     }
                 }
                 lastToggleTime = now;
 
-                if (isStreamingLive || (watchLiveRequested && now - lastToggleTime >= 2500) || (btn && btn.classList.contains('streaming-active') && isStreamingLive)) {
+                if (isStreamingLive || (btn && btn.classList.contains('streaming-active') && isStreamingLive)) {
                     // User clicked STOP
                     watchLiveRequested = false;
                     isStreamingLive = false;
@@ -1334,8 +1421,7 @@ def app_home():
                     }
                     if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
                     if (img && currentSnapshotUrl) img.src = currentSnapshotUrl;
-                    fetch('/api/stream/stop', { method: 'POST' })
-                        .finally(() => checkStreamStatus());
+                    fetch('/api/stream/stop', { method: 'POST' }).finally(() => syncLiveState());
                 } else {
                     // User clicked START
                     watchLiveRequested = true;
@@ -1356,59 +1442,58 @@ def app_home():
                         body: JSON.stringify({ duration: 60 })
                     })
                     .then(r => r.json())
-                    .then(data => {
-                        checkStreamStatus();
-                    })
+                    .then(() => syncLiveState())
                     .catch(err => {
                         watchLiveRequested = false;
-                        if (btn) btn.classList.remove('streaming-active');
-                        if (btnIcon) btnIcon.textContent = '📹';
-                        if (btnLabel) {
-                            btnLabel.textContent = 'Watch Live Stream';
-                            btnLabel.style.color = 'var(--accent-light)';
-                        }
-                        if (label) {
-                            label.textContent = 'STANDBY';
-                            label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
-                        }
+                        syncLiveState();
                         alert('Could not start live stream: ' + err);
                     });
                 }
             }
 
-            function checkStreamStatus() {
-                fetch('/api/stream_status')
+            function syncLiveState() {
+                fetch('/api/live_state')
                     .then(r => r.json())
                     .then(data => {
+                        // 1. Sync Live Stream State
+                        const stream = data.stream || {};
                         const img = document.getElementById('cam-feed');
+                        const placeholder = document.getElementById('cam-placeholder');
                         const label = document.getElementById('live-label');
                         const meta = document.getElementById('cam-meta-text');
                         const btn = document.getElementById('btn-watch-live');
                         const btnIcon = document.getElementById('watch-live-icon');
                         const btnLabel = document.getElementById('watch-live-label');
-                        if (!img || !label) return;
 
-                        if (data.active) {
+                        if (stream.active) {
                             if (!isStreamingLive) {
                                 isStreamingLive = true;
-                                img.src = '/video_feed?' + Date.now();
+                                if (img) {
+                                    img.src = '/video_feed?' + Date.now();
+                                    img.style.display = 'block';
+                                }
+                                if (placeholder) placeholder.style.display = 'none';
                             }
-                            label.textContent = '● LIVE (' + (data.fps > 0 ? data.fps + ' FPS' : '30s') + ')';
-                            label.parentElement.style.background = 'rgba(239, 68, 68, 0.95)';
-                            if (meta) meta.textContent = 'Live Cloud Stream • ' + data.fps + ' FPS';
+                            if (label) {
+                                label.textContent = '● LIVE (' + (stream.fps > 0 ? stream.fps + ' FPS' : 'HD') + ')';
+                                label.parentElement.style.background = 'rgba(239, 68, 68, 0.95)';
+                            }
+                            if (meta) meta.textContent = 'Live Cloud Stream • ' + (stream.fps || 15) + ' FPS';
                             if (btn) {
                                 btn.classList.add('streaming-active');
                                 if (btnIcon) btnIcon.textContent = '⏹️';
                                 if (btnLabel) {
-                                    const secText = data.remaining_sec ? ('Stop (' + data.remaining_sec + 's)') : 'Stop Live Stream';
+                                    const secText = stream.remaining_sec ? ('Stop (' + stream.remaining_sec + 's)') : 'Stop Live Stream';
                                     btnLabel.textContent = secText;
                                     btnLabel.style.color = '#fca5a5';
                                 }
                             }
-                        } else if (data.demand || watchLiveRequested) {
-                            // Connecting phase: camera is waking up
-                            label.textContent = '● CONNECTING...';
-                            label.parentElement.style.background = 'rgba(245, 158, 11, 0.95)';
+                        } else if (stream.demand || watchLiveRequested) {
+                            // Connecting phase
+                            if (label) {
+                                label.textContent = '● CONNECTING...';
+                                label.parentElement.style.background = 'rgba(245, 158, 11, 0.95)';
+                            }
                             if (meta) meta.textContent = 'Connecting to camera stream...';
                             if (btn) {
                                 btn.classList.add('streaming-active');
@@ -1423,10 +1508,14 @@ def app_home():
                             if (isStreamingLive) {
                                 isStreamingLive = false;
                                 stopFrameFallback();
-                                if (currentSnapshotUrl) img.src = currentSnapshotUrl;
+                                if (img && currentSnapshotUrl) {
+                                    img.src = currentSnapshotUrl;
+                                }
                             }
-                            label.textContent = 'STANDBY';
-                            label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
+                            if (label) {
+                                label.textContent = 'STANDBY';
+                                label.parentElement.style.background = 'rgba(100, 116, 139, 0.7)';
+                            }
                             if (meta) meta.textContent = 'OV3660 HD • AI Face Recognition';
                             if (btn) {
                                 watchLiveRequested = false;
@@ -1438,11 +1527,38 @@ def app_home():
                                 }
                             }
                         }
+
+                        // 2. Sync Latest Visitor (Live Event Auto-Refresh)
+                        if (data.latest_visit && data.latest_visit.id > latestVisitId) {
+                            handleIncomingVisitor(data.latest_visit, true);
+                        }
+
+                        // 3. Sync PIR Motion Alert Button State across all devices live
+                        if (typeof data.pir_enabled !== 'undefined') {
+                            const pirIcon = document.getElementById('pir-icon');
+                            const pirLabel = document.getElementById('pir-label');
+                            const pirBtn = document.getElementById('btn-pir');
+                            if (pirIcon) pirIcon.textContent = data.pir_enabled ? '🚶' : '🛑';
+                            if (pirLabel) pirLabel.textContent = data.pir_enabled ? 'Motion: ON' : 'Motion: OFF';
+                            if (pirBtn) pirBtn.classList.toggle('active', data.pir_enabled);
+                        }
                     })
                     .catch(() => {});
             }
-            setInterval(checkStreamStatus, 1500);
-            checkStreamStatus();
+
+            // High-frequency live state sync (every 1.5s)
+            setInterval(syncLiveState, 1500);
+            syncLiveState();
+
+            // Tab visibility change: immediately sync when user returns to tab
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    syncLiveState();
+                    if (!sseInstance || sseInstance.readyState === EventSource.CLOSED) {
+                        connectEventStream();
+                    }
+                }
+            });
 
             function togglePirAlerts() {
                 fetch('/api/pir/toggle', { method: 'POST' })
@@ -1450,8 +1566,10 @@ def app_home():
                     .then(data => {
                         const icon = document.getElementById('pir-icon');
                         const label = document.getElementById('pir-label');
+                        const pirBtn = document.getElementById('btn-pir');
                         if (icon) icon.textContent = data.enabled ? '🚶' : '🛑';
                         if (label) label.textContent = data.enabled ? 'Motion: ON' : 'Motion: OFF';
+                        if (pirBtn) pirBtn.classList.toggle('active', data.enabled);
                     });
             }
 
@@ -1463,7 +1581,12 @@ def app_home():
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({esp32_ip: ip, ntfy_topic: topic})
                 }).then(() => {
-                    window.location.reload();
+                    closeConfigModal();
+                    const btnNtfy = document.querySelector('button[onclick*="ntfy.sh"]');
+                    if (btnNtfy) {
+                        btnNtfy.setAttribute('onclick', "window.open('https://ntfy.sh/" + topic + "', '_blank')");
+                    }
+                    alert('✅ Settings saved successfully!');
                 });
             }
         </script>
