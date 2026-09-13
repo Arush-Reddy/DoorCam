@@ -1241,7 +1241,7 @@ def app_home():
             function copyTunnelUrl() {
                 if (currentTunnelUrl && currentTunnelUrl.startsWith('https://')) {
                     navigator.clipboard.writeText(currentTunnelUrl).then(() => {
-                        alert("✅ Copied Cloudflare URL to clipboard!\nOpen this link on your phone over 4G/5G.");
+                        alert("✅ Copied Cloudflare URL to clipboard!\\nOpen this link on your phone over 4G/5G.");
                     });
                 } else {
                     alert("Tunnel is initializing. Please wait a few seconds...");
