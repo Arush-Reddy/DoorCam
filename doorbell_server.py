@@ -1287,7 +1287,10 @@ def app_home():
                 }
             }
 
+            let lastToggleTime = 0;
+
             function toggleWatchLive() {
+                const now = Date.now();
                 const btn = document.getElementById('btn-watch-live');
                 const btnIcon = document.getElementById('watch-live-icon');
                 const btnLabel = document.getElementById('watch-live-label');
@@ -1295,7 +1298,15 @@ def app_home():
                 const meta = document.getElementById('cam-meta-text');
                 const img = document.getElementById('cam-feed');
 
-                if (watchLiveRequested || isStreamingLive || (btn && btn.classList.contains('streaming-active'))) {
+                // If currently connecting, don't allow immediate accidental cancel on rapid taps
+                if (watchLiveRequested && !isStreamingLive) {
+                    if (now - lastToggleTime < 2500) {
+                        return; // Waiting for camera to start
+                    }
+                }
+                lastToggleTime = now;
+
+                if (isStreamingLive || (watchLiveRequested && now - lastToggleTime >= 2500) || (btn && btn.classList.contains('streaming-active') && isStreamingLive)) {
                     // User clicked STOP
                     watchLiveRequested = false;
                     isStreamingLive = false;
