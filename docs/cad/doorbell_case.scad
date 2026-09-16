@@ -29,13 +29,13 @@ back_depth   = inner_h - (split_z - wall_thick) + wall_thick; // 15.8 mm (Total 
 
 // --- SENSOR & APERTURE POSITIONS (from bottom inner wall) ---
 cam_lens_d   = 9.5;     // OV3660 lens barrel diameter
-cam_lens_y   = 57.0;    // Lens center Y (exact alignment with soldered ESP32-CAM)
+cam_lens_y   = 62.0;    // Lens center Y (mathematical center of Row F/G on 70mm board)
 pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
-pir_y        = 100.0;   // PIR dome center Y (in upper wiring cavity)
+pir_y        = 98.0;    // PIR dome center Y (centered in top 38mm cavity)
 btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507 / metal momentary)
-btn_y        = 27.0;    // Button center Y (exact center between USB-C and ESP32)
+btn_y        = 28.0;    // Button center Y (exact center between USB-C at 20mm and ESP32 at 37mm)
 flash_led_x  = 11.0;    // Flash LED X offset from center
-flash_led_y  = 39.0;    // Flash LED Y from bottom inner wall
+flash_led_y  = 44.0;    // Flash LED Y (aligned with bottom-right corner of ESP32 at Row M)
 usbc_w       = 13.0;    // USB-C clearance width
 usbc_h       = 7.0;     // USB-C clearance height
 
