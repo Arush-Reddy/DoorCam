@@ -29,11 +29,13 @@ back_depth   = inner_h - (split_z - wall_thick) + wall_thick; // 15.8 mm (Total 
 
 // --- SENSOR & APERTURE POSITIONS (from bottom inner wall) ---
 cam_lens_d   = 9.5;     // OV3660 lens barrel diameter
-cam_lens_y   = 98.0;    // Lens center Y
+cam_lens_y   = 57.0;    // Lens center Y (exact alignment with soldered ESP32-CAM)
 pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
-pir_y        = 62.0;    // PIR dome center Y
-btn_d        = 16.0;    // 16mm doorbell push button hole
-btn_y        = 24.0;    // Button center Y
+pir_y        = 100.0;   // PIR dome center Y (in upper wiring cavity)
+btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507 / metal momentary)
+btn_y        = 27.0;    // Button center Y (exact center between USB-C and ESP32)
+flash_led_x  = 11.0;    // Flash LED X offset from center
+flash_led_y  = 39.0;    // Flash LED Y from bottom inner wall
 usbc_w       = 13.0;    // USB-C clearance width
 usbc_h       = 7.0;     // USB-C clearance height
 
@@ -91,7 +93,7 @@ module front_shell() {
             cylinder(d1=cam_lens_d + 3.6, d2=cam_lens_d, h=1.8);
 
         // 3. Status / Flash LED Light-pipe (2.5mm hole)
-        translate([outer_w/2 + 13.0, wall_thick + cam_lens_y + 6.0, -1])
+        translate([outer_w/2 + flash_led_x, wall_thick + flash_led_y, -1])
             cylinder(d=2.5, h=wall_thick + 2.0);
 
         // 4. HC-SR501 PIR Dome Aperture (23.5mm)
