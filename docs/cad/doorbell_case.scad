@@ -36,7 +36,7 @@ pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
 pir_y        = 113.0;   // Centered in top 34mm cavity (5.25mm clearance each side)
 btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507)
 btn_y        = 13.5;    // Centered in bottom bay (5.35mm to wall, 4.35mm to PCB)
-flash_led_x  = 11.0;    // Flash LED X offset from center (14mm from right edge on 50mm board)
+flash_led_x  = -11.0;   // Flash LED X offset from center (-11.0 = bottom-right when viewed from front face)
 flash_led_y  = pcb_offset_y + 26.0; // 52.0 mm (EXACT match to user's 2.6cm physical eye measurement!)
 flash_led_d  = 3.5;     // 3.5mm aperture for wide-angle flashlight illumination
 usbc_w       = 13.0;    // USB-C clearance width
