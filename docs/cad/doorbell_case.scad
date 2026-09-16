@@ -28,16 +28,16 @@ split_z      = 13.0;    // Front shell height
 back_depth   = inner_h - (split_z - wall_thick) + wall_thick; // 15.8 mm (Total height = 28.8 mm)
 
 // --- SENSOR & APERTURE POSITIONS (from bottom inner wall) ---
-// Based on exact physical ruler photo calibration (Apsara Deluxe Scale):
+// Based on exact eye-level physical ruler measurements:
 pcb_offset_y = 26.0;    // Perfboard bottom edge rests at 26.0mm from bottom inner wall
 cam_lens_d   = 9.5;     // OV3660 lens barrel diameter
-cam_lens_y   = pcb_offset_y + 50.5; // 76.5 mm (Exact match to 5.05cm ruler mark!)
+cam_lens_y   = pcb_offset_y + 47.5; // 73.5 mm (EXACT match to user's 4.75cm physical eye measurement!)
 pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
 pir_y        = 113.0;   // Centered in top 34mm cavity (5.25mm clearance each side)
 btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507)
 btn_y        = 13.5;    // Centered in bottom bay (5.35mm to wall, 4.35mm to PCB)
-flash_led_x  = 11.4;    // Flash LED X offset from center (in line with Column 14)
-flash_led_y  = pcb_offset_y + 33.5; // 59.5 mm (Exact match to 3.35cm ruler mark!)
+flash_led_x  = 11.0;    // Flash LED X offset from center (14mm from right edge on 50mm board)
+flash_led_y  = pcb_offset_y + 26.0; // 52.0 mm (EXACT match to user's 2.6cm physical eye measurement!)
 flash_led_d  = 3.5;     // 3.5mm aperture for wide-angle flashlight illumination
 usbc_w       = 13.0;    // USB-C clearance width
 usbc_h       = 7.0;     // USB-C clearance height
