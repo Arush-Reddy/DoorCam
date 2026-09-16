@@ -16,26 +16,28 @@ PART = "assembled"; // ["front", "back", "button", "assembled"]
 
 // --- CORE DIMENSIONS (mm) ---
 wall_thick   = 2.4;     // Sturdy outdoor wall thickness
-inner_w      = 54.0;    // 50mm perfboard + 2mm margin per side
-inner_l      = 120.0;   // 70mm perfboard + PIR dome + wiring cavity
+inner_w      = 54.0;    // 50.0mm perfboard + 2mm margin per side
+inner_l      = 130.0;   // 70mm perfboard + 34mm PIR cavity + 26mm button bay
 inner_h      = 24.0;    // Internal cavity height for full component stack
 fillet_r     = 6.5;     // Smooth ergonomic rounded outer corners
 
 outer_w      = inner_w + wall_thick * 2; // 58.8 mm
-outer_l      = inner_l + wall_thick * 2; // 124.8 mm
+outer_l      = inner_l + wall_thick * 2; // 134.8 mm (~13.5 cm)
 
 split_z      = 13.0;    // Front shell height
 back_depth   = inner_h - (split_z - wall_thick) + wall_thick; // 15.8 mm (Total height = 28.8 mm)
 
 // --- SENSOR & APERTURE POSITIONS (from bottom inner wall) ---
+// Based on exact physical ruler measurements:
+pcb_offset_y = 26.0;    // Perfboard bottom edge rests at 26.0mm from bottom inner wall
 cam_lens_d   = 9.5;     // OV3660 lens barrel diameter
-cam_lens_y   = 62.0;    // Lens center Y (mathematical center of Row F/G on 70mm board)
+cam_lens_y   = pcb_offset_y + 47.5; // 73.5 mm (Exact match to user's 4.75cm measurement!)
 pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
-pir_y        = 98.0;    // PIR dome center Y (centered in top 38mm cavity)
-btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507 / metal momentary)
-btn_y        = 28.0;    // Button center Y (exact center between USB-C at 20mm and ESP32 at 37mm)
+pir_y        = 113.0;   // Centered in top 34mm cavity (5.25mm clearance each side)
+btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507)
+btn_y        = 13.5;    // Centered in bottom bay (5.35mm to wall, 4.35mm to PCB)
 flash_led_x  = 11.0;    // Flash LED X offset from center
-flash_led_y  = 44.0;    // Flash LED Y (aligned with bottom-right corner of ESP32 at Row M)
+flash_led_y  = pcb_offset_y + 33.5; // 59.5 mm (aligned with bottom-right of ESP32)
 usbc_w       = 13.0;    // USB-C clearance width
 usbc_h       = 7.0;     // USB-C clearance height
 
@@ -152,16 +154,24 @@ module back_shell() {
             }
 
             // 4 Perfboard Support Standoffs (4mm height, supports 50x70mm board)
-            pcb_offset_y = 12.0;
+            // Exactly aligned with user's physical measurement: 46.0mm (W) x 66.0mm (H)
             pcb_standoff_h = 4.0;
+            hole_dx = 46.0;
+            hole_dy = 66.0;
+            board_margin_x = (50.0 - hole_dx) / 2; // 2.0mm
+            board_margin_y = (70.0 - hole_dy) / 2; // 2.0mm
+            board_start_x  = outer_w / 2 - 25.0;    // centered 50mm board
             for (p = [
-                [wall_thick + 2.0, wall_thick + pcb_offset_y],
-                [outer_w - wall_thick - 2.0, wall_thick + pcb_offset_y],
-                [wall_thick + 2.0, wall_thick + pcb_offset_y + 70.0],
-                [outer_w - wall_thick - 2.0, wall_thick + pcb_offset_y + 70.0]
+                [board_start_x + board_margin_x, wall_thick + pcb_offset_y + board_margin_y],
+                [board_start_x + 50.0 - board_margin_x, wall_thick + pcb_offset_y + board_margin_y],
+                [board_start_x + board_margin_x, wall_thick + pcb_offset_y + 70.0 - board_margin_y],
+                [board_start_x + 50.0 - board_margin_x, wall_thick + pcb_offset_y + 70.0 - board_margin_y]
             ]) {
-                translate([p[0], p[1], wall_thick])
-                    cylinder(d=6.0, h=pcb_standoff_h);
+                translate([p[0], p[1], wall_thick]) {
+                    cylinder(d=6.5, h=pcb_standoff_h);
+                    // 2.4mm locating pin (drops right into perfboard M3 corner holes for instant alignment!)
+                    cylinder(d=2.4, h=pcb_standoff_h + 2.0);
+                }
             }
         }
 
