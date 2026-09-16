@@ -36,8 +36,9 @@ pir_d        = 23.5;    // HC-SR501 Fresnel dome diameter
 pir_y        = 113.0;   // Centered in top 34mm cavity (5.25mm clearance each side)
 btn_d        = 16.3;    // 16.3mm slip-fit for M16 panel button (R13-507)
 btn_y        = 13.5;    // Centered in bottom bay (5.35mm to wall, 4.35mm to PCB)
-flash_led_x  = 11.0;    // Flash LED X offset from center
-flash_led_y  = pcb_offset_y + 33.5; // 59.5 mm (aligned with bottom-right of ESP32)
+flash_led_x  = 11.0;    // Flash LED X offset from center (14mm from right edge on 50mm board)
+flash_led_y  = pcb_offset_y + 26.0; // 52.0 mm (exact match to user's 2.6cm ruler measurement!)
+flash_led_d  = 3.5;     // 3.5mm aperture for wide-angle flashlight illumination
 usbc_w       = 13.0;    // USB-C clearance width
 usbc_h       = 7.0;     // USB-C clearance height
 
@@ -94,9 +95,11 @@ module front_shell() {
         translate([outer_w/2, wall_thick + cam_lens_y, -0.1])
             cylinder(d1=cam_lens_d + 3.6, d2=cam_lens_d, h=1.8);
 
-        // 3. Status / Flash LED Light-pipe (2.5mm hole)
+        // 3. Status / Flash LED Light-pipe (3.5mm hole with wide-beam bezel)
         translate([outer_w/2 + flash_led_x, wall_thick + flash_led_y, -1])
-            cylinder(d=2.5, h=wall_thick + 2.0);
+            cylinder(d=flash_led_d, h=wall_thick + 2.0);
+        translate([outer_w/2 + flash_led_x, wall_thick + flash_led_y, -0.1])
+            cylinder(d1=flash_led_d + 2.0, d2=flash_led_d, h=1.5);
 
         // 4. HC-SR501 PIR Dome Aperture (23.5mm)
         translate([outer_w/2, wall_thick + pir_y, -1])
